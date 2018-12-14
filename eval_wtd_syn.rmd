@@ -5,6 +5,8 @@ output:
     toc: true
     toc_depth: 4
     toc_float: true
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r runall, eval=FALSE, echo=FALSE}
@@ -41,7 +43,7 @@ options(tibble.print_max = 60, tibble.print_min = 60) # if more than 60 rows, pr
 # ggplot2 tibble tidyr readr purrr dplyr stringr forcats
 library("scales")
 
-library("btools")
+library("btools") # Anderson, you should not need this. If you do, it's at https://github.com/donboyd5/btools
 
 library("knitr")
 
@@ -182,7 +184,6 @@ vnames <- read_csv("./data/pufvars.csv")
 ```{r define_files, include=FALSE}
 # define files to use in the analysis -- true puf, sample, etc.
 
-
 ttfnames <- c("puf_10p_sample_train.csv", "puf_10p_sample_test.csv")
 names(ttfnames) <- c("train", "test")
 
@@ -206,7 +207,6 @@ df <- bind_rows(fget(fnames, "train"),
   mutate(MARS=round(MARS))
 count(df, ftype)
 count(df, MARS)
-
 
 ```
 
@@ -237,9 +237,10 @@ stack <- bind_rows(puf.base, df) %>%
   mutate(wt=s006 / 100,
          ftype=factor(ftype, levels=files.order))
 
+# define corvars -- variables for which we want correlations
 evars <- which(str_sub(names(stack), 1, 1)=="e")
 pvars <- which(str_sub(names(stack), 1, 1)=="p")
-corvars <- c(names(stack)[union(evars, pvars)], "wt")
+corvars <- c(names(stack)[union(evars, pvars)], "wt") 
 
 # count(stack %>% filter(ftype=="puf.full"), ftype, MARS)
 # non-integer MARS: synpufx
@@ -324,7 +325,6 @@ f("pdiff4")
 ```
 
 
-
 ## How can synpuf2 weight be so far off and yet weighted wages are so close?
 ```{r}
 d <- stack %>%
@@ -337,7 +337,7 @@ d <- stack %>%
   gather(variable, value, -ftype, -wagegrp) %>%
   unite(spreadvar, variable, ftype)  %>%
   spread(spreadvar, value)
-names(d)
+# names(d)
 
 f <- function(vpart){
   d %>% 
@@ -456,6 +456,7 @@ p
 ```{r}
 
 cdfplot <- function(var){
+  vdesc <- vnames$vdesc[match(var, vnames$vname)]
   df <- stack %>%
     filter(ftype %in% c("puf.full", "synpuf2", "synpuf4")) %>%
     select(ftype, wt, value=var) %>%
@@ -470,7 +471,7 @@ cdfplot <- function(var){
   # minval
   
   capt <- "- x-axis is log10 scale\n- For display purposes x-axis is truncated at left to start at cum.pct=1%"
-  gtitle <- paste0("Cumulative distribution of weighted ", var)
+  gtitle <- paste0("Cumulative distribution of weighted ", var, ": ", vdesc)
   gsub <- "Aggregate records excluded"
   ylab <- paste0("Cumulative proportion of the sum of weighted ", var)
   
@@ -504,12 +505,7 @@ cdfvars <- setdiff(names(stack), excl.vars)
 cdfvars
 
 for(var in cdfvars) print(cdfplot(var))
-# cdfplot("e00200")
-# cdfplot("e00300")
-# cdfplot("e00600")
-# cdfplot("e00900")
-# cdfplot("e01500")
-# cdfplot("p23250")
+
 
 ```
 
