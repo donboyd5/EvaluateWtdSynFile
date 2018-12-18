@@ -1,0 +1,105 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+## Quick summaries of unweighted file
+### Unweighted sums of selected variables
+```{r sumtabs_unwtd, echo=FALSE, tidy=FALSE}
+stack %>% 
+  group_by(ftype) %>% 
+  summarise(n=n(),
+            wt=sum(wt),
+            e00200=sum(e00200),
+            e00300=sum(e00300),
+            e00400=sum(e00400),
+            e00650=sum(e00650),
+            e01500=sum(e01500)) %>%
+  kable(caption="Unweighted sums",
+        digits=c(0), 
+        format.args=list(big.mark = ','))
+
+```
+
+
+### Unweighted quantiles for the weight variable
+```{r qweight, echo=TRUE, tidy=FALSE}
+stack %>% 
+  group_by(ftype) %>% 
+  do(qtiledf(.$wt)) %>% 
+  kable(caption="Unweighted quantiles of wt",
+        digits=c(0, 0, 0, rep(1, 7)), 
+        format.args=list(big.mark = ','))
+```
+
+
+### Unweighted correlations
+```{r corrs, echo=FALSE, tidy=TRUE}
+# step 1
+# create a data frame grouped by file, where each row has correlation of a variable pair
+# and columns for their names and concatenated name
+# duplicates are removed (for variables x and y, keep the x-y correlation but not y-x; also, not x-x or y-y)
+# this step can take ~30 secs
+corlong <- stack %>%
+  select(ftype, corvars) %>%
+  group_by(ftype) %>%
+  do(cordf(.[, -1])) %>%
+  do(trimcor(.)) %>% # remove the unneeded variables
+  ungroup
+
+# create a wide file with the worst differences noted
+corwide <- corlong %>%
+  group_by(combo) %>%
+  mutate(diff=value - value[ftype=="puf.full"],
+         worst.diff=diff[which.max(abs(diff))],
+         worst.diff.var=ftype[which.max(abs(diff))]) %>%
+  gather(variable, value, value, diff) %>%
+  filter(!(ftype=="puf.full" & variable=="diff")) %>%
+  unite(varname, ftype, variable) %>%
+  mutate(varname=str_remove(varname, "_value")) %>%
+  spread(varname, value) %>%
+  select(combo, puf.full, use.files, contains("_diff"), worst.diff, worst.diff.var) %>%
+  ungroup %>%
+  separate(combo, c("v1", "v2"), remove=FALSE) %>%
+  left_join(synvars %>% select(v1=vname, corvar1=vdesc)) %>%
+  left_join(synvars %>% select(v2=vname, corvar2=vdesc)) %>%
+  select(-v1, -v2) %>%
+  arrange(combo)
+  
+corwide %>%
+  select(-corvar1) %>%
+  filter(str_detect(combo, "e00200")) %>%
+  arrange(-abs(worst.diff)) %>%
+  kable(caption="Correlations with wages, sorted by abs(worst difference)", digits=3)
+
+corwide %>%
+  arrange(-abs(worst.diff)) %>%
+  filter(row_number() <= 100) %>%
+  kable(caption="Top 100 worst differences in correlations, sorted by abs(worst difference)", digits=3)
+
+```
+
+
+## Weighted sums of selected variables
+```{r sumtabs_wtd, echo=FALSE, tidy=FALSE}
+svars <- c("e00200", "e00300", "e00400", "e00650", "e01500", "e00900")
+tmp <- stack %>% 
+  dplyr::select(ftype, wt, svars) %>%
+  gather(variable, value, -ftype, -wt) %>%
+  left_join(stackvars) %>%
+  group_by(ftype, variable, vdesc) %>% 
+  summarise(value.b=sum(value * wt) / 1e9) %>%
+  dplyr::select(ftype, variable, value.b, vdesc) %>%
+  spread(ftype, value.b) %>%
+  group_by(variable, vdesc, puf.full) %>% # this forces dplyr to remain in the output untransformed
+  mutate_at(vars(-variable, -vdesc, -puf.full),
+            funs(pdiff=. / puf.full * 100 - 100))
+
+tmp %>%
+  kable(caption="Weighted sums in $ billions",
+        digits=c(1), 
+        format.args=list(big.mark = ','))
+
+```
+

@@ -22,8 +22,10 @@ editor_options:
 indir <- "D:/Dropbox/RPrograms PC/OSPC/EvaluateWtdSynFile/" # directory for this file
 outdir <- "D:/Google Drive/OSPC/synpuf_analyses/" # PUBLIC directory
 rmdfn <- paste0(indir, "eval_wtd_syn.rmd")  # input rmarkdown code (this file)
-outfn <- paste0(outdir, "eval_excl_taxcalc_", format(Sys.time(), "%Y-%m-%d"), ".html")
+# outfn <- paste0(outdir, "eval_excl_taxcalc_", format(Sys.time(), "%Y-%m-%d"), ".html")
+outfn <- paste0(outdir, "eval_taxcalc_", format(Sys.time(), "%Y-%m-%d-%H:%M"), ".html")
 rmarkdown::render(rmdfn, output_format="html_document", output_file=outfn)
+
 ```
 
 
@@ -93,11 +95,12 @@ upper_case_vars <- c("RECID", "MARS", "XTOT", "DSI", "EIC", "FLPDYR", "MIDR")
 # synvars
 
 agibrks <- c(-Inf, 0, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, Inf)
+
 ```
 
 
 ```{r functions, include=FALSE}
-fget <- function(fvec, ftype){
+fget <- function(ftype, fvec){
   read_csv(fvec[ftype], 
            col_types = cols(.default= col_double()), 
            n_max=-1) %>%
@@ -123,7 +126,7 @@ cordf <- function(df){
   #   var2  - text variable name
   #   value - correlation between var1 and var2
   # return as a data frame
-  cordf <- cor(df, use="complete.obs") %>%
+  cordf <- cor(df, use="pairwise.complete.obs") %>%
     as_tibble(rownames = "var1") %>%
     gather(var2, value, -var1)
   return(cordf)
@@ -165,11 +168,16 @@ saveRDS(puf, paste0(tc.dir, "puf.rds"))
 
 
 ```{r info, include=FALSE, eval=FALSE}
+# https://docs.google.com/spreadsheets/d/1qTQJd2DGMm5zXnFxyP2Rw-8rszOkLNFrobg-NIikIsw/edit?usp=sharing
 # #	File	Training share	Method	Seed columns	Runtime (min)
 # 1	synpuf1.csv	10%	  RF	DSI, XTOT	8
 # 2	synpuf2.csv	100%	RF	DSI, XTOT	55
 # 3	synpuf3.csv	10%	  RF	DSI, XTOT, S006	5
 # 4	synpuf4.csv	100%	RF	DSI, XTOT, S006	51
+# 5	synpuf5.csv	10%	RF	MARS, DSI, XTOT, S006, F6251, MIDR, FDED	50	6
+# 6	synpuf6.csv	100%	RF	MARS, DSI, XTOT, S006, F6251, MIDR, FDED	50	172
+
+# synthpop1.csv
 
 ```
 
@@ -182,30 +190,39 @@ vnames <- read_csv("./data/pufvars.csv")
 
 
 ```{r define_files, include=FALSE}
-# define files to use in the analysis -- true puf, sample, etc.
+# define vector of names of synthesized files
 
 ttfnames <- c("puf_10p_sample_train.csv", "puf_10p_sample_test.csv")
 names(ttfnames) <- c("train", "test")
 
-synfnames <- paste0("synpuf", 1:4, ".csv")
-names(synfnames) <- paste0("synpuf", 1:4)
+synfnames <- paste0("synpuf", 1:6, ".csv")
+names(synfnames) <- paste0("synpuf", 1:6)
 
-fnames <- paste0(synd, c(ttfnames, synfnames))
-names(fnames) <- names(c(ttfnames, synfnames))
+spnums <- 1:3
+spnames <- paste0("synthpop", spnums, ".csv")
+names(spnames) <- paste0("synthpop", spnums)
+
+fnames <- paste0(synd, c(ttfnames, synfnames, spnames))
+names(fnames) <- names(c(ttfnames, synfnames, spnames))
 # fnames
 
 ```
 
 
 ```{r get_runs, include=FALSE}
-df <- bind_rows(fget(fnames, "train"), 
-                fget(fnames, "test"), 
-                fget(fnames, "synpuf1"),
-                fget(fnames, "synpuf2"),
-                fget(fnames, "synpuf3"),
-                fget(fnames, "synpuf4")) %>%
-  mutate(MARS=round(MARS))
+names(fnames)
+
+use.files <- c("synpuf6", "synthpop2", "synthpop3")
+
+# df <- ldply(paste0("synpuf", c(4, 6)), fget, fnames)
+df <- ldply(use.files, fget, fnames)
+glimpse(df)
 count(df, ftype)
+
+df <- df %>%
+  select(-penratio, -divratio, -E00100, -E09600) %>% # temporary -- remove vars that are not in synpufs
+  mutate(MARS=ifelse(ftype %in% names(fnames)[1:6], round(MARS), MARS)) # early files had non-integer MARS
+
 count(df, MARS)
 
 ```
@@ -223,14 +240,14 @@ puf.base <- puf %>%
 
 identical(names(df), names(puf.base))
 
-count(df, ftype)
-
 ```
 
 
 ```{r create_stack_files, include=FALSE}
 # define the desired order of output from the files so we can create a factor to do that
-files.order <- c("train", "test", "synpuf1", "synpuf3", "puf.full", "synpuf2", "synpuf4")
+# files.order <- c("train", "test", "synpuf1", "synpuf3", "puf.full", "synpuf2", "synpuf4")
+# files.order <- c("puf.full", "synpuf4", "synpuf6")
+files.order <- c("puf.full", use.files)
 
 stack <- bind_rows(puf.base, df) %>%
   setNames(change_case(names(.))) %>%
@@ -238,7 +255,7 @@ stack <- bind_rows(puf.base, df) %>%
          ftype=factor(ftype, levels=files.order))
 
 # define corvars -- variables for which we want correlations
-evars <- which(str_sub(names(stack), 1, 1)=="e")
+evars <- which(str_sub(names(stack), 1, 1)=="e") # this will not pick up EIC because that is an upper-case var
 pvars <- which(str_sub(names(stack), 1, 1)=="p")
 corvars <- c(names(stack)[union(evars, pvars)], "wt") 
 
@@ -277,98 +294,46 @@ stack %>%
 ```
 
 
-```{r eval=FALSE}
-glimpse(stack)
-stack %>%
-  filter(ftype %in% c("puf.full", "synpuf4")) %>%
-  group_by(ftype, DSI, XTOT) %>%
-  summarise(wt=sum(wt / 1e6)) %>%
-  spread(ftype, wt) %>%
-  janitor::adorn_totals("row") %>%
-  kable(digits=3, caption="Sum of weights, millions")
-
-```
-
-
 ## Weighted sums of variables
 * Values other than the pdiffs are in $ billions
-* diff2 and diff4 are synpuf2 and synpuf4 minus puf.full
-* pdiff2 and pdiff4 are diffs as % of puf.full
 ```{r}
 # wtd sums of variables
-diffs <- stack %>%
-  filter(ftype %in% c("puf.full", "synpuf2", "synpuf4")) %>%
+
+diff.base <- stack %>%
   select(ftype, corvars) %>%
-  gather(variable, value, -wt, -ftype) %>%
+  gather(variable, value, -wt, -ftype)
+
+db1 <- diff.base %>%
   group_by(ftype, variable) %>%
-  summarise(value=sum(value * wt) / 1e9) %>%
-  spread(ftype, value) %>%
-  mutate(diff2=synpuf2 - puf.full,
-         diff4=synpuf4 - puf.full,
-         pdiff2=diff2 / puf.full * 100,
-         pdiff4=diff4 / puf.full * 100)  %>%
+  summarise(wvalueb=sum(value * wt) / 1e9) %>%
+  ungroup
+
+diffs <- left_join(db1 %>% filter(ftype!="puf.full"),
+                   db1 %>% filter(ftype=="puf.full") %>% select(variable, wvalueb.puf=wvalueb)) %>%
+  select(variable, ftype, wvalueb.puf, wvalueb) %>%
+  mutate(diff=wvalueb - wvalueb.puf,
+         pdiff=diff / wvalueb.puf * 100) %>%
   left_join(vnames %>% select(variable=vname, vdesc))
-# glimpse(diffs)
+glimpse(diffs)
 
-f <- function(sortvar) {
-  diffs %>%
-    arrange(-abs(!!sym(sortvar))) %>%
-    select(setdiff(names(.), "vdesc"), vdesc) %>%
-    kable(digits=1, caption=paste0("Weighted aggregates in $ billions, sorted by abs of: ", sortvar))
-}
-f("puf.full")
-f("diff2")
-f("pdiff2")
-f("diff4")
-f("pdiff4")
+diffs %>%
+  arrange(-abs(wvalueb.puf), ftype) %>%
+  kable(digits=1, caption="Weighted aggregates in $ billions, sorted by abs puf size then file")
 
-```
+# f <- function(sortvar) {
+#   # compare weighted sums, sorted by the sortvar passed to the function
+#   diffs %>%
+#     arrange(-abs(!!sym(sortvar))) %>%
+#     select(setdiff(names(.), "vdesc"), vdesc) %>%
+#     kable(digits=1, caption=paste0("Weighted aggregates in $ billions, sorted by abs of: ", sortvar))
+# }
 
+# f("puf.full")
+# f("synpuf6_diff")
+# f("synpuf6_pdiff")
 
-## How can synpuf2 weight be so far off and yet weighted wages are so close?
-```{r}
-d <- stack %>%
-  filter(ftype %in% c("puf.full", "synpuf2", "synpuf4")) %>%
-  mutate(wagegrp=cut(e00200, agibrks, right=FALSE)) %>%
-  group_by(ftype, wagegrp) %>%
-  summarise(n=n(),
-            wt.sum=sum(wt), 
-            wagesb=sum(wt * e00200) / 1e9) %>%
-  gather(variable, value, -ftype, -wagegrp) %>%
-  unite(spreadvar, variable, ftype)  %>%
-  spread(spreadvar, value)
-# names(d)
+# still needed in synthpop p08000  e09700 e09800 -- all are approx zero
 
-f <- function(vpart){
-  d %>% 
-    select(wagegrp, contains(vpart)) %>%
-    janitor::adorn_totals("row") %>%
-    mutate(diff2=.[[3]] - .[[2]],
-           diff4=.[[4]] - .[[2]],
-           pdiff2=diff2 / .[[2]] * 100,
-           pdiff4=diff4 / .[[2]] * 100) %>%
-    kable(caption="Wage-related values by wage group",
-          digits=c(0, rep(1, 7)),
-          format.args=list(big.mark = ','))
-  }
-
-```
-
-### Record count by wage group
-```{r}
-f("n_")
-```
-
-
-### Weighted records (i.e., returns) by wage group
-```{r}
-f("wt.sum")
-```
-
-
-### Sum of weighted wages, in $ billions, by wage group
-```{r}
-f("wagesb")
 ```
 
 
@@ -381,7 +346,8 @@ cor1 <- stack %>%
   group_by(ftype) %>%
   do(cordf(.[, -1])) %>%
   do(trimcor(.)) %>%
-  separate(combo, c("var1", "var2"), remove=FALSE)
+  separate(combo, c("var1", "var2"), remove=FALSE) %>%
+  ungroup
 # glimpse(cor1)
 
 wtdpuf <- stack %>%
@@ -393,28 +359,31 @@ wtdpuf <- stack %>%
   arrange(-abwtd.sumb)
 # wtdpuf
 
-cor.wtd <- cor1 %>%
-  filter(ftype %in% c("puf.full", "synpuf2", "synpuf4")) %>%
-  spread(ftype, value) %>%
-  mutate(diff2=synpuf2 - puf.full,
-         diff4=synpuf4 - puf.full,
-         awsumb1=wtdpuf$abwtd.sumb[match(var1, wtdpuf$variable)],
-         awsumb2=wtdpuf$abwtd.sumb[match(var2, wtdpuf$variable)]) %>%
-  select(-var1, -var2)
+cor.comp <- 
+  left_join(cor1 %>% filter(ftype!="puf.full") %>% select(ftype, combo, comp.cor=value),
+            cor1 %>% filter(ftype=="puf.full") %>% select(combo, puf.cor=value, var1, var2)) %>%
+  left_join(wtdpuf %>% select(var1=variable, wval1=abwtd.sumb)) %>%
+  left_join(wtdpuf %>% select(var2=variable, wval2=abwtd.sumb)) %>%
+  mutate(sumval=wval1 + wval2)
+glimpse(cor.comp)
 
-cor.wtd %>%
-  arrange(-abs(diff4)) %>%
-  filter(row_number() <= 50) %>%
-  kable(caption="Correlations sorted by abs(diff4): Top 50",
-        digits=c(0, rep(3, 5), 1, 1), 
-        format.args=list(big.mark = ','))
+cor.comp2 <- cor.comp %>%
+  mutate(diff=comp.cor - puf.cor) %>%
+  select(combo, ftype, puf.cor, comp.cor, diff, sumval)
+  
+cor.comp2 %>%
+  arrange(-sumval, ftype) %>%
+  select(-sumval) %>%
+  filter(row_number() <= 100) %>%
+  kable(caption="Correlations among large variables: Top 100",
+        digits=3)
 
-cor.wtd %>%
-  arrange(-abs(awsumb2)) %>%
-  filter(row_number() <= 50) %>%
-  kable(caption="Correlations sorted by sum(abs(leftmost variable)): Top 50",
-        digits=c(0, rep(3, 5), 1, 1), 
-        format.args=list(big.mark = ','))
+cor.comp2 %>%
+  arrange(-abs(diff), ftype) %>%
+  select(-sumval) %>%
+  filter(row_number() <= 100) %>%
+  kable(caption="Correlations: Top 100 worst differences",
+        digits=3)
 
 ```
 
@@ -423,9 +392,8 @@ cor.wtd %>%
 
 ## CDF of file weights
 
-```{r}
-df <- stack %>%
-    filter(ftype %in% c("puf.full", "synpuf2", "synpuf4")) %>%
+```{r eval=FALSE}
+dat <- stack %>%
     select(ftype, value=wt) %>%
     group_by(ftype) %>%
     arrange(value) %>%
@@ -435,7 +403,7 @@ gtitle <- "Cumulative distribution of file weights"
 gsub <- "Aggregate records excluded"
 ylab <- "Cumulative proportion of the sum of weights"
   
-p <- df %>%
+p <- dat %>%
   filter(value > .01) %>%
   ggplot(aes(value, cum.pct, colour=ftype, size=ftype)) + 
   geom_line() +
@@ -450,19 +418,21 @@ p
 ```
 
 
-
-## CDFs of weighted values, continuous variables
-
 ```{r}
 
-cdfplot <- function(var){
+cdfplot.uw <- function(var){
+  print(var)
   vdesc <- vnames$vdesc[match(var, vnames$vname)]
   df <- stack %>%
-    filter(ftype %in% c("puf.full", "synpuf2", "synpuf4")) %>%
-    select(ftype, wt, value=var) %>%
+    dplyr::select(ftype, wt, value=var) %>%
     group_by(ftype) %>%
     arrange(value) %>%
-    mutate(cum.pct=cumsum(wt * value) / sum(wt * value))
+    mutate(cum.pct=cumsum(value) / sum(value))
+  
+  if(nrow(df) < 100){
+    p <- paste0(var, " has only ", nrow(df), " rows.")
+    return(p)
+  }
   
   # find a good minimum x-axis value to start the plot on -- based on a desired cumulative percentage
   cum.pct.threshold <- .01
@@ -470,7 +440,51 @@ cdfplot <- function(var){
   minval <- df$value[df$ftype=="puf.full"][iminval]
   # minval
   
-  capt <- "- x-axis is log10 scale\n- For display purposes x-axis is truncated at left to start at cum.pct=1%"
+  capt <- "- x-axis is log10 scale\n- For display purposes x-axis is truncated at left to start at puf.full's cum.pct=1%"
+  gtitle <- paste0("Cumulative distribution of UNweighted ", var, ": ", vdesc)
+  gsub <- "Aggregate records excluded"
+  ylab <- paste0("Cumulative proportion of the sum of UNweighted ", var)
+  
+  # define x scale break points and associated labels
+  sq10 <- c(0, 1e3, 10e3, 25e3, 50e3, 100e3, 250e3, 500e3, 750e3, 1e6,
+            1.5e6, 2e6, 3e6, 4e6, 5e6, 10e6, 25e6, 50e6, 100e6)
+  xlabs <- scales::comma(sq10 / 1e3)
+  xscale.l10 <- scale_x_log10(name=paste0(var, " in $ thousands"), breaks=sq10, labels=xlabs)
+  
+  p <- df %>%
+    filter(value > minval) %>%
+    ggplot(aes(value, cum.pct, colour=ftype)) + 
+    geom_line(size=1.5) +
+    theme_bw() +
+    ggtitle(gtitle, subtitle=gsub) +  labs(caption=capt) +
+    scale_y_continuous(name=ylab, breaks=c(seq(0, .9, .05), seq(.92, 1, .02))) +
+    xscale.l10 +
+    theme(axis.text.x=element_text(angle=45, size=10, hjust=1, colour="black")) +
+    theme(plot.caption = element_text(hjust=0, size=rel(.8)))
+  return(p)
+}
+
+cdfplot <- function(var){
+  print(var)
+  vdesc <- vnames$vdesc[match(var, vnames$vname)]
+  df <- stack %>%
+    dplyr::select(ftype, wt, value=var) %>%
+    group_by(ftype) %>%
+    arrange(value) %>%
+    mutate(cum.pct=cumsum(wt * value) / sum(wt * value))
+    
+  if(nrow(df) < 100){
+    p <- paste0(var, " has only ", nrow(df), " rows.")
+    return(p)
+  }
+  
+  # find a good minimum x-axis value to start the plot on -- based on a desired cumulative percentage
+  cum.pct.threshold <- .01
+  iminval <- min(which(df$cum.pct[df$ftype=="puf.full"] > cum.pct.threshold))
+  minval <- df$value[df$ftype=="puf.full"][iminval]
+  # minval
+  
+  capt <- "- x-axis is log10 scale\n- For display purposes x-axis is truncated at left to start at puf.full's cum.pct=1%"
   gtitle <- paste0("Cumulative distribution of weighted ", var, ": ", vdesc)
   gsub <- "Aggregate records excluded"
   ylab <- paste0("Cumulative proportion of the sum of weighted ", var)
@@ -494,8 +508,8 @@ cdfplot <- function(var){
   return(p)
 }
 
-```
 
+```
 
 
 ```{r}
@@ -503,10 +517,19 @@ names(stack)
 excl.vars <- c("DSI", "EIC", "fded", "f2441", "f6251", "MARS", "MIDR", "n24", "XTOT", "s006", "ftype", "wt")
 cdfvars <- setdiff(names(stack), excl.vars)
 cdfvars
+```
 
+
+## CDFs of UNweighted values, continuous variables
+```{r}
+for(var in cdfvars) print(cdfplot.uw(var))
+```
+
+
+
+## CDFs of weighted values, continuous variables
+```{r}
 for(var in cdfvars) print(cdfplot(var))
-
-
 ```
 
 
@@ -592,27 +615,31 @@ tc.wincmd <- function(tc.fn, tc.dir, tc.cli, taxyear=2013){
 ```
 
 
-```{r prep_file_for_taxcalc, include=FALSE, eval=FALSE}
+```{r prep_file_for_taxcalc, include=FALSE, eval=TRUE}
 # files we want to run through tc - will change as new synpuf's are created
 # files.order # show the files we can choose from
-tc.files <- c("puf.full", "synpuf2", "synpuf4")
+tc.files <- c("puf.full", use.files) # "synpuf4"
+names(stack)
+
+navars <- c("DSI", "f6251", "MIDR", "fded", "EIC", "n24", "f2441", "e09800", "e09700", "p08000")
+tc.vars <- setdiff(names(stack),navars)
 
 tc.base <- stack %>%
   filter(ftype %in% tc.files) %>%
+  select(tc.vars) %>%
   mutate(RECID=row_number()) %>%
-  do(impose_variable_rules(.)) %>%
-  do(splitvars(.)) %>%
-  select(ftype, wt, RECID, MARS, XTOT, e00200, e00200p, e00200s, e00300, e00900, e00900p, e00900s,
-         e00600, e00650, e01500, e01700)
-
+  do(impose_variable_rules(.)) %>% # not needed for synpuf5 and later
+  do(splitvars(.))
 # write tcbase to a file
 tc.fn <- "tcbase.csv"
 write_csv(tc.base, paste0(tc.dir, tc.fn))
 
+summary(tc.base)
+
 ```
 
 
-```{r run_tc, include=FALSE, eval=FALSE}
+```{r run_tc, include=FALSE, eval=TRUE}
 cmd <- tc.wincmd(tc.fn, tc.dir, tc.cli)
 cmd
 
@@ -623,7 +650,7 @@ proc.time() - a # can take a few minutes
 ```
 
 
-```{r get_tcresults, include=FALSE, eval=FALSE}
+```{r get_tcresults, include=FALSE, eval=TRUE}
 tc.outfn <- "tcbase-13-#-#-#.csv"
 tc.output <- read_csv(paste0(tc.dir, tc.outfn), 
                       col_types = cols(.default= col_double()), 
@@ -648,8 +675,8 @@ afile %>%
 
 ## Graph cumulative distribution of variables vs. AGI
 ### Wages
-```{r eval=FALSE}
-df <- afile %>%
+```{r eval=TRUE}
+df2 <- afile %>%
   select(ftype, wt, e00200, c00100) %>%
   group_by(ftype) %>%
   arrange(c00100) %>%
@@ -664,7 +691,7 @@ sq10 <- c(0, 10e3, 25e3, 50e3, 100e3, 250e3, 500e3, 750e3, 1e6, 1.5e6, 2e6, 3e6,
 xlabs <- scales::comma(sq10 / 1e3)
 xscale.l10 <- scale_x_log10(name="AGI in $ thousands", breaks=sq10, labels=xlabs)
 
-df %>%
+df2 %>%
   filter(c00100 > 10e3) %>%
   ggplot(aes(c00100, cum.pct, colour=ftype)) + 
   geom_line(size=1.5) +
@@ -679,8 +706,9 @@ df %>%
 ```
 
 
-```{r eval=FALSE}
-df <- afile %>%
+### Tax before credit
+```{r eval=TRUE}
+df2 <- afile %>%
   select(ftype, wt, taxbc, c00100) %>%
   group_by(ftype) %>%
   arrange(c00100) %>%
@@ -695,7 +723,7 @@ sq10 <- c(0, 10e3, 25e3, 50e3, 100e3, 250e3, 500e3, 750e3, 1e6, 1.5e6, 2e6, 3e6,
 xlabs <- scales::comma(sq10 / 1e3)
 xscale.l10 <- scale_x_log10(name="AGI in $ thousands", breaks=sq10, labels=xlabs)
 
-df %>%
+df2 %>%
   filter(c00100 > 10e3) %>%
   ggplot(aes(c00100, cum.pct, colour=ftype)) + 
   geom_line(size=1.5) +

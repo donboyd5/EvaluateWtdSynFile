@@ -1,0 +1,86 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r cdfvars, echo=FALSE, tidy=FALSE}
+# define the variables for which we want plots
+# names(stack)
+excl.vars <- c("DSI", "EIC", "fded", "f2441", "f6251", "MARS", "MIDR", "n24", "XTOT", "s006", "ftype", "wt")
+cdfvars <- setdiff(names(stack), excl.vars)
+# cdfvars
+```
+
+## CDF goodness-of-fit measure for weighted values, continuous variables
+```{r gfit, echo=FALSE}
+df <- stack %>%
+  dplyr::select(ftype, wt, cdfvars) %>%
+  gather(variable, value, -ftype, -wt) %>%
+  arrange(ftype, variable) %>%
+  group_by(ftype, variable) %>%
+  arrange(value) %>%
+  mutate(wtd.value=wt * value,
+         cum.pct=cumsum(wtd.value) / sum(wtd.value),
+         ntile=ntile(cum.pct, 1000))
+
+df2 <- df %>%
+  group_by(ftype, variable, ntile) %>%
+  summarise(cum.pct=max(cum.pct))
+
+
+# rsq <- function (x, y) cor(x, y) ^ 2
+# df3 <- df2 %>%
+#   spread(ftype, cum.pct) %>%
+#   group_by(variable) %>%
+#   summarise_at(vars(-variable, -ntile, -puf.full), 
+#                funs(r2=rsq(puf.full, .)))
+# 
+# df3 %>%
+#   ggplot(aes(synpuf8_r2, synthpop3_r2)) +
+#   geom_point() +
+#   geom_text(aes(label=variable))
+
+# Per Max (https://github.com/PSLmodels/taxdata/issues/267)
+# The KS test p-values of 0 indicate that the CDFs are significantly different, not the same 
+# (the null hypothesis is that they are the same). 
+# Higher D values show greater differences.
+
+ks1 <- df2 %>%
+  spread(ftype, cum.pct) %>%
+  group_by(variable) %>%
+  summarise_at(vars(-variable, -ntile, -puf.full), 
+               funs(ks.p=ks.test(puf.full, .)$p.value))
+
+# find worst fit
+ks2 <- ks1 %>%
+  gather(pvar, value, -variable) %>%
+  group_by(variable) %>%
+  mutate(worst.fit=value[which.min(value)],
+         ftype=str_remove(pvar, "_ks.p"),
+         worst.ftype=ftype[which.min(value)]) %>%
+  select(-ftype) %>%
+  spread(pvar, value) %>%
+  select(-contains("worst"), contains("worst")) %>%
+  ungroup %>%
+  left_join(synvars %>% select(variable=vname, vdesc))
+
+ks2 %>%
+  arrange(worst.fit) %>%
+  kable(caption="Kolmogorov-Smirnov p-statistic for CDFs of weighted values", digits=3)
+
+count(ks2, worst.ftype)  
+
+```
+
+
+
+
+## CDF plots of weighted values, continuous variables
+```{r cdfwtd, echo=FALSE}
+for(var in cdfvars) print(cdfplot(var))
+```
+
+
