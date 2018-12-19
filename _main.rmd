@@ -5,9 +5,8 @@ output:
     df_print: paged
     toc: true
     toc_depth: 4
-    toc_float:
-      collapsed: FALSE
-      smooth_scroll: true
+editor_options: 
+  chunk_output_type: console
 ---
 
 
@@ -18,13 +17,15 @@ output:
 
 # the directory names must be hard-coded here - can't use getwd()
 
+    # toc_float:
+    #   collapsed: FALSE
+    #   smooth_scroll: true
+
 indir <- "D:/Dropbox/RPrograms PC/OSPC/EvaluateWtdSynFile/" # directory for this file
 # outdir <- "D:/Google Drive/OSPC/synpuf_analyses/" # PUBLIC directory
-outdir <- "D:/tcdir/"
+outdir <- "D:/tcdir/" # PUBLIC directory
 rmdfn <- paste0(indir, "_main.rmd")  # input rmarkdown code (this file)
-# outfn <- paste0(outdir, "eval_excl_taxcalc_", format(Sys.time(), "%Y-%m-%d"), ".html")
-
-outfn <- paste0(outdir, "eval_", format(Sys.time(), "%Y-%m-%d-%H_%M"), ".html")
+outfn <- paste0(outdir, "eval_", format(Sys.time(), "%Y-%m-%d-%H-%M"), ".html")
 rmarkdown::render(rmdfn, output_format="html_document", output_file=outfn)
 
 ```
@@ -71,6 +72,7 @@ saveRDS(puf, paste0(tc.dir, "puf.rds"))
 
 
 ```{r create_important_variables, include=FALSE}
+
 puf.vnames <- get_puf_vnames()
 
 source("./includes/define_synfile_names.r") # creates synfile.fnames and bad.MARS.files. Updated when new synthetic files created
@@ -97,6 +99,11 @@ stack <- bind_rows(puf.base, synfiles) %>%
   mutate(wt=s006 / 100,
          ftype=factor(ftype, levels=files.order))
 
+# define continuous.vars -- variables for which we want correlations
+evars <- which(str_sub(names(stack), 1, 1)=="e") # this will not pick up EIC because that is an upper-case var
+pvars <- which(str_sub(names(stack), 1, 1)=="p")
+continuous.vars <- c(names(stack)[union(evars, pvars)], "wt") 
+
 stackvars <- tibble(variable=names(stack), byvar=str_to_lower(variable)) %>%
   left_join(puf.vnames %>% select(byvar=vname, vdesc)) %>%
   select(-byvar) %>%
@@ -117,5 +124,9 @@ stackvars <- tibble(variable=names(stack), byvar=str_to_lower(variable)) %>%
 ```{r child_CDFanalysis, child="./child_rmd_files/CDFanalysis.rmd", eval=TRUE}
 ```
 
+
+# Tax calculations and related analysis
+```{r child_TaxAnalysis, child="./child_rmd_files/TaxAnalysis.rmd", eval=TRUE}
+```
 
 

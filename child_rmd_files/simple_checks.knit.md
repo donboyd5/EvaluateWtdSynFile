@@ -1,6 +1,14 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
 
-## Sum of weights, wages, and selected other variables
-## Unweighted sums of selected variables
+## Quick summaries of unweighted file
+### Unweighted sums of selected variables
+
+
+
 
 
 

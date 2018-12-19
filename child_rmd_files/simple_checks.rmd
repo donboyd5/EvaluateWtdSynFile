@@ -24,7 +24,7 @@ stack %>%
 
 
 ### Unweighted quantiles for the weight variable
-```{r qweight, echo=TRUE, tidy=FALSE}
+```{r qweight, echo=FALSE, tidy=FALSE}
 stack %>% 
   group_by(ftype) %>% 
   do(qtiledf(.$wt)) %>% 
@@ -42,7 +42,7 @@ stack %>%
 # duplicates are removed (for variables x and y, keep the x-y correlation but not y-x; also, not x-x or y-y)
 # this step can take ~30 secs
 corlong <- stack %>%
-  select(ftype, corvars) %>%
+  select(ftype, continuous.vars) %>%
   group_by(ftype) %>%
   do(cordf(.[, -1])) %>%
   do(trimcor(.)) %>% # remove the unneeded variables
@@ -83,9 +83,8 @@ corwide %>%
 
 ## Weighted sums of selected variables
 ```{r sumtabs_wtd, echo=FALSE, tidy=FALSE}
-svars <- c("e00200", "e00300", "e00400", "e00650", "e01500", "e00900")
 tmp <- stack %>% 
-  dplyr::select(ftype, wt, svars) %>%
+  dplyr::select(ftype, wt, setdiff(continuous.vars, "wt")) %>%
   gather(variable, value, -ftype, -wt) %>%
   left_join(stackvars) %>%
   group_by(ftype, variable, vdesc) %>% 

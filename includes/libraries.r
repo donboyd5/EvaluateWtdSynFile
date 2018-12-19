@@ -9,3 +9,5 @@ library("scales")
 library("btools") # You should not need this. If you do, it's at https://github.com/donboyd5/btools
 
 library("knitr")
+
+library("janitor") # for adorn_totals
