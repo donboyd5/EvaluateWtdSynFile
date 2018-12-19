@@ -69,7 +69,7 @@ write_csv(tc.base, paste0(tc.dir, tc.fn))
 
 
 ```{r run_tc, include=FALSE, eval=TRUE}
-# run Tax-Calculator. It will write (dump) its results to a csv file in the output director tc.dir
+# run Tax-Calculator. It will write (dump) its results to a csv file in the output directory tc.dir
 
 # The output filename will be of the form:
 #   fname-
@@ -176,7 +176,7 @@ tmp %>%
 ```
 
 
-## Examine results by AGI range
+## Examine results by AGI range. Amounts are in $ billions.
 ```{r agirange_data, include=FALSE, eval=TRUE}
 agiranges <- c(-Inf, 0, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, 1e6, 10e6, Inf)
 glimpse(afile)
@@ -221,16 +221,47 @@ f <- function(var){
 
 ```
 
-```{r agirange_summaries, echo=FALSE, tidy=FALSE, eval=TRUE, results='asis'}
+```{r agirange_summaries, echo=FALSE, tidy=FALSE, eval=FALSE, results='asis'}
 # 
 # oddly, results='asis' is needed when printing kable inside a for loop
 # see https://github.com/yihui/knitr/issues/886
 # f(analysis.vars[1])
 # f(analysis.vars[2])
-library("kableExtra")
-for(var in c("n", "wt", analysis.vars)) print(f(var) %>% kable_styling() %>% scroll_box(width = "1200px"))
+# library("kableExtra")
+# for(var in c("n", "wt", analysis.vars)) print(f(var))
+# for(var in c("n", "wt", analysis.vars)) print(f(var) %>% kable_styling() %>% scroll_box(width = "1200px"))
 
 ```
 
 
+```{r echo=FALSE, fig.width=13, warning=FALSE, results='asis', rows.print=11, cols.print=10}
+
+vars <- c("n", "wt", sort(analysis.vars))
+
+f2 <- function(var){
+  df <- wtd.totals %>%
+    filter(variable==var) %>%
+    spread(ftype, value) %>%
+    adorn_totals(where="row") %>%
+    mutate_at(vars(-c(1:3)), 
+              funs(diff=. - puf.full,
+                   pdiff=(. - puf.full) / puf.full * 100)) %>%
+    left_join(synvars %>% select(variable=vname, vdesc))
+  return(df)
+}
+
+
+f3 <- function(var){
+  library("scales")
+  f2(var) %>%
+    mutate_at(vars(-agirange, -variable, -vdesc), funs(comma(., accuracy=.1)))
+}
+tmp <- ldply(vars, f3)
+# tmp
+DT::datatable(tmp, rownames=FALSE, 
+              options=list(autoWidth = TRUE,
+                           pageLength = 11,
+                           columnDefs = list(list(className = 'dt-right', targets =0:(ncol(tmp) - 2)))))
+# columnDefs = list(list(className = 'dt-center', targets = 0:4) "_all"
+```
 

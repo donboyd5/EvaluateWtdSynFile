@@ -1,0 +1,120 @@
+---
+title: "Evaluation of weighted synthetic file after tax calculations"
+output:
+  html_document:
+    df_print: paged
+    toc: true
+    toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r runall, eval=FALSE, echo=FALSE}
+# UPDATE THESE DIRECTORIES WHEN RUN ON A DIFFERENT SYSTEM ----
+# ALSO UPDATE DIRECTORIES IN THE system_specific CHUNK BELOW ----
+# use this to create a dated output file - just run the lines below manually
+
+# the directory names must be hard-coded here - can't use getwd()
+
+indir <- "D:/Dropbox/RPrograms PC/OSPC/EvaluateWtdSynFile/" # directory for this file
+# outdir <- "D:/Google Drive/OSPC/synpuf_analyses/" # PUBLIC directory
+outdir <- "D:/tcdir/" # PUBLIC directory
+rmdfn <- paste0(indir, "_mainTax.rmd")  # input rmarkdown code (this file)
+outfn <- paste0(outdir, "evalTax_", format(Sys.time(), "%Y-%m-%d-%H-%M"), ".html")
+rmarkdown::render(rmdfn, output_format="html_document", output_file=outfn)
+
+```
+
+
+```{r mainSet options, echo=FALSE, cache=FALSE}
+options(width=120)
+knitr::opts_chunk$set(echo=FALSE, warning=FALSE, message=FALSE, fig.width=14, fig.height=10)
+# Note: when saving maps (ggsave), width=16, height=9 seems to get rid of white space
+
+```
+
+<style>
+.main-container {
+    max-width: 1800px !important;
+  }
+
+table, th, td {
+    border: 1px solid black;
+}
+
+table {
+    width: 140%;
+}
+
+tr:nth-child(even) {background-color: #f2f2f2;}
+
+</style>
+
+
+```{r setup, echo=FALSE, warning=FALSE, message=FALSE, eval=TRUE}
+## NOTE
+
+source("./includes/libraries.r")
+# note that when using dplyr's select function, I always identify it as dplyr::select because
+# if synthpop is loaded plain select will not work as synthpop masks dplyr's select
+
+source("./includes/functions.r")
+source("./includes/globals_system_specific_boyd.r") # use a different version of this file if changing systems
+source("./includes/globals_other.r")
+
+```
+
+
+
+```{r create_important_variables, include=FALSE}
+
+puf.vnames <- get_puf_vnames()
+# Sys.getenv("RSTUDIO_PANDOC")
+# puf.vnames
+
+source("./includes/define_synfile_names.r") # creates synfile.fnames and bad.MARS.files. Updated when new synthetic files created
+
+#.. define the subset of files we will examine in this run ----
+use.files <- c("synpuf8", "synthpop3")
+
+files.order <- c("puf.full", use.files) # define the order of files in the output
+
+```
+
+
+```{r get_files, include=FALSE, eval=TRUE}
+remove.vars <- c("penratio", "divratio", "E00100", "E09600") # temporary fix - variables to remove from boyd files
+
+synfiles <- get_synfiles(use.files, synfile.fnames, remove.vars, bad.MARS.files)
+synvars <- puf.vnames %>% filter(vname %in% str_to_lower(names(synfiles)))
+
+puf.base <- get_puf.base(names(synfiles))
+
+# stack the puf and synthetic files
+stack <- bind_rows(puf.base, synfiles) %>%
+  setNames(change_case(names(.))) %>%
+  mutate(wt=s006 / 100,
+         ftype=factor(ftype, levels=files.order))
+
+# define continuous.vars -- variables for which we want correlations
+evars <- which(str_sub(names(stack), 1, 1)=="e") # this will not pick up EIC because that is an upper-case var
+pvars <- which(str_sub(names(stack), 1, 1)=="p")
+continuous.vars <- c(names(stack)[union(evars, pvars)], "wt") 
+
+stackvars <- tibble(variable=names(stack), byvar=str_to_lower(variable)) %>%
+  left_join(puf.vnames %>% select(byvar=vname, vdesc)) %>%
+  select(-byvar) %>%
+  arrange(variable)
+
+# glimpse(stack)
+# Now we can finally start our analysis
+
+```
+
+
+# Tax calculations and related analysis
+```{r child_TaxAnalysis, child="./child_rmd_files/TaxAnalysis.rmd", eval=TRUE}
+```
+
+

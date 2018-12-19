@@ -1,5 +1,5 @@
 ---
-title: "Evaluation of weighted synthetic file"
+title: "Evaluation of weighted synthetic file, prior to tax calculations"
 output:
   html_document:
     df_print: paged
@@ -17,15 +17,11 @@ editor_options:
 
 # the directory names must be hard-coded here - can't use getwd()
 
-    # toc_float:
-    #   collapsed: FALSE
-    #   smooth_scroll: true
-
 indir <- "D:/Dropbox/RPrograms PC/OSPC/EvaluateWtdSynFile/" # directory for this file
 # outdir <- "D:/Google Drive/OSPC/synpuf_analyses/" # PUBLIC directory
 outdir <- "D:/tcdir/" # PUBLIC directory
-rmdfn <- paste0(indir, "_main.rmd")  # input rmarkdown code (this file)
-outfn <- paste0(outdir, "eval_", format(Sys.time(), "%Y-%m-%d-%H-%M"), ".html")
+rmdfn <- paste0(indir, "_mainNonTax.rmd")  # input rmarkdown code (this file)
+outfn <- paste0(outdir, "evalNonTax_", format(Sys.time(), "%Y-%m-%d-%H-%M"), ".html")
 rmarkdown::render(rmdfn, output_format="html_document", output_file=outfn)
 
 ```
@@ -74,6 +70,8 @@ saveRDS(puf, paste0(tc.dir, "puf.rds"))
 ```{r create_important_variables, include=FALSE}
 
 puf.vnames <- get_puf_vnames()
+# Sys.getenv("RSTUDIO_PANDOC")
+# puf.vnames
 
 source("./includes/define_synfile_names.r") # creates synfile.fnames and bad.MARS.files. Updated when new synthetic files created
 
@@ -85,7 +83,7 @@ files.order <- c("puf.full", use.files) # define the order of files in the outpu
 ```
 
 
-```{r get_files, include=FALSE}
+```{r get_files, include=FALSE, eval=TRUE}
 remove.vars <- c("penratio", "divratio", "E00100", "E09600") # temporary fix - variables to remove from boyd files
 
 synfiles <- get_synfiles(use.files, synfile.fnames, remove.vars, bad.MARS.files)
@@ -122,11 +120,6 @@ stackvars <- tibble(variable=names(stack), byvar=str_to_lower(variable)) %>%
 
 # Cumulative distributions of weighted variables
 ```{r child_CDFanalysis, child="./child_rmd_files/CDFanalysis.rmd", eval=TRUE}
-```
-
-
-# Tax calculations and related analysis
-```{r child_TaxAnalysis, child="./child_rmd_files/TaxAnalysis.rmd", eval=TRUE}
 ```
 
 
