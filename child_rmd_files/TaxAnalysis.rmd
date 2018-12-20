@@ -61,7 +61,7 @@ tc.base <- stack %>%
 
 # write tcbase to a file, because the Tax-Calculator CLI reads a csv file
 tc.fn <- "tcbase.csv"
-write_csv(tc.base, paste0(tc.dir, tc.fn))
+write_csv(tc.base, paste0(globals$tc.dir, tc.fn))
 
 # summary(tc.base)
 

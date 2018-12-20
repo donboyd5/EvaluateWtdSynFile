@@ -59,10 +59,10 @@ source("./includes/globals_other.r")
 # after creating and saving the puf as an rds file on local machine, set eval=FALSE so it is not rerun
 puf.fn <- "puf2011.csv"
 
-puf <- read_csv(paste0(pufdir, puf.fn), 
+puf <- read_csv(paste0(globals$pufdir, puf.fn), 
                 col_types = cols(.default= col_double()), 
                 n_max=-1)
-saveRDS(puf, paste0(tc.dir, "puf.rds"))
+saveRDS(puf, paste0(globals$tc.dir, "puf.rds"))
 
 ```
 

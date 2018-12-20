@@ -10,12 +10,12 @@ get_puf_vnames <- function(){
 
 
 get_puf.base <- function(keepnames){
-  puf <- readRDS(paste0(tc.dir, "puf.rds"))
+  puf <- readRDS(paste0(globals$tc.dir, "puf.rds"))
   
   puf.base <- puf %>% 
     filter(!RECID %in% 999996:999999) %>%
-    mutate(ftype="puf.full") %>%
-    dplyr::select(one_of(keepnames))
+    dplyr::select(one_of(intersect(keepnames, names(.)))) %>%
+    mutate(ftype="puf.full")
   return(puf.base)
 }
 

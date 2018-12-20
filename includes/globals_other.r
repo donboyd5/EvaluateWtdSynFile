@@ -1,11 +1,14 @@
 
+
+if(!exists("globals")) globals <- list()
+
 # these globals are not system-specific
 
 # variables that I believe Tax-Calculator expects to be upper case
 # note that FLPDYR and RECID are not synthesized
-upper_case_vars <- c("RECID", "MARS", "XTOT", "DSI", "EIC", "FLPDYR", "MIDR") 
+globals$upper_case_vars <- c("RECID", "MARS", "XTOT", "DSI", "EIC", "FLPDYR", "MIDR") 
 
-agibrks <- c(-Inf, 0, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, Inf)
+# agibrks <- c(-Inf, 0, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, Inf)
 
 
 

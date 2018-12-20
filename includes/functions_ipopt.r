@@ -13,6 +13,18 @@ make.sparse.struc <- function(A) {
   return(S)
 }
 
+
+make.sparse.struc.nonempty <- function(A) {
+  # this is much faster than the make.sparse function in ipoptr
+  f <- function(x) which(x!=0, arr.ind=TRUE)
+  rownames(A) <- NULL # just to be safe
+  S <- apply(A, 1, f)
+  S <- as.list(S)
+  S <- S[lapply(S, length) > 0] 
+  return(S)
+}
+
+
 #****************************************************************************************************
 #                constraint evaluation and coefficient functions for ipoptr -- same for all ####
 #****************************************************************************************************
@@ -28,8 +40,8 @@ eval_g <- function(x, inputs) {
   #   j -- index into x (i.e., the variable number
   #   value
   
-  constraints <- inputs$ccmat.df %>%
-    group_by(i, cname) %>%
+  constraints <- inputs$constraint.coefficients.sparse %>%
+    group_by(i, constraint.shortname) %>%
     summarise(constraint.value=sum(value * x[j]) )
   
   return(constraints$constraint.value)
@@ -49,7 +61,7 @@ eval_jac_g <- function(x, inputs){
   
   # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
   
-  return(inputs$ccmat.df$value)
+  return(inputs$constraint.coefficients.sparse$value)
 }
 
 
