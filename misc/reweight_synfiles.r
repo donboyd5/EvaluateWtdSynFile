@@ -134,11 +134,11 @@ agi.ranges <- c(
   "c00100 > 200e3 & c00100 <= 500e3",
   "c00100 > 500e3 & c00100 <= 1e6",
   "c00100 > 1e6 & c00100 <= 10e6",
-  "c00100 > 10e6 & c00100 <= Inf")
+  "c00100 > 10e6")
 agi.ranges
 
 names(synfile) %>% sort
-vars.to.target <- c("wt", "c00100", "e00200", "e00300", "e00650", "p23250")
+vars.to.target <- c("wt", "c00100", "e00200", "e00300", "e00650", "e01700", "p23250", "taxbc")
 # vtt <- c("wt", "c00100", "e00200", "e00200p")
 # vtt <- c("wt", "c00100", "e00200", "e00200p", "e00600", "e00650")
 # vtt <- c("wt", "c00100", "e00200", "e00200p", "e00600", "e00650", "p23250")
@@ -244,9 +244,12 @@ synfile.vs.targets %>%
 #.. Establish tentative tolerances around targets based on the above
 # will need to automate this when we hae a lot of targets
 tol.tentative <- rep(.001, nrow(target.rules.feasible))
-tol.tentative[c(9, 8, 12)] <- Inf
-tol.tentative[c(3, 6, 2, 5)] <- .5
-tol.tentative[c(1, 49, 51, 55, 53, 43, 7, 10, 61)] <- .1
+# tol.tentative[c(9, 8, 12)] <- Inf
+# tol.tentative[c(3, 6, 2, 5)] <- .5
+# tol.tentative[c(1, 49, 51, 55, 53, 43, 7, 10, 61)] <- .1
+tol.tentative[c(10, 9, 80)] <- Inf
+tol.tentative[c(17, 6, 3, 7, 2)] <- .4
+tol.tentative[c(1, 72, 5, 64, 62, 65, 70, 54, 8, 78, 56)] <- .15
 tol.tentative
 
 
@@ -260,7 +263,7 @@ tol.tentative
 cc.sparse.struc <- make.sparse.struc(constraint.coefficients.dense %>% as.matrix %>% t)
 # cc.sparse.struc.nonmissing <- make.sparse.struc.nonempty(constraint.coefficients %>% as.matrix %>% t)
 
-length(cc.sparse.struc) - nrow(target.rules.nonmissing) # must equal number of constraints
+length(cc.sparse.struc) - nrow(target.rules.feasible) # must equal number of constraints
 
 # now prepare the inputs for ipopt
 inputs <- list()
@@ -356,7 +359,7 @@ agiranges <- c(-Inf, 0, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, 1e6, 10e6, Inf)
 comps <- stack %>%
   mutate(agirange=cut(c00100, agiranges, right=FALSE), wtvar=1e9) %>%
   group_by(ftype, agirange) %>%
-  summarise_at(vars(wtvar, c00100, taxbc, e00200), funs(sum(. * wt) / 1e9))
+  summarise_at(vars(wtvar, c00100, taxbc, e00200, e01700), funs(sum(. * wt) / 1e9))
 comps
 
 f <- function(var) {
@@ -375,8 +378,10 @@ f <- function(var) {
 }
 f("wtvar")
 f("c00100")
-f("taxbc")
 f("e00200")
+f("taxbc")
+f("e01700")
+
 
 
 #****************************************************************************************************
