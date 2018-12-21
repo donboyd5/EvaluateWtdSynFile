@@ -4,18 +4,23 @@
 
 # CAUTION: Currently this is only set to work on the full PUF and a synfile of the full PUF
 
+# Steps in this program ----
 # The main things it does are:
-# 1. Optionally prepare a file and its puf counterpart, if not already prepared.
+# 1. ONETIME PER SYNFILE - Optionally prepare a file and its puf counterpart, if not already prepared.
 #    - Get a synfile, stack it with PUF using only the variables that are in both files
 #    - Run it through Tax-Calculator so that we can get desired calculated variables
-#    - Save the prepared file and Tax-Calculator output as a list so that step 1 need not be done in the future on this file
-# 2. Get the previously prepared list for a file
+#    - Save the prepared file and Tax-Calculator output as a list so that step 1 need not be done in the future on this synfile
+# 2. Get previously-prepared synfile-PUF and tax output, merge, and separate PUF and synfile
 # 3. Define and construct a set of targets (weighted values) from the base file
-# 4. Compare weighted values on the existing file to the targets to see which targets may be especially hard to hit
-# 5. Construct a new reweighted file, synfile.rwt, that hits the targets
+# 4. Compare weighted values on synthetic file to target values
+# 5. Prepare inputs for optimization
+# 6. Run ipoptr to get optimal x values
+# 7. Construct a new reweighted file, synfile.rwt, that hits the targets
 #    - Obtain adjustment factors for synfile weights that minimize a distortion function based on size of the adjustment,
 #      while satisfying constraints that ensure that the targets are hit (or that results are within defined tolerances)
 #    - Construct synfile.rwt by adjusting the wt variable (and save the raw synthesized weight as wt.rawsyn)
+# 8. Save all 3 files as a list, and also as csv to synpuf
+
 # 6. Do simple comparisons of base, synfile, and synfile.rwt
 # 7. Save the resulting synfile.rwt so that it can be analyzed further
 
@@ -82,7 +87,7 @@ puf.vnames <- get_puf_vnames()
 
 
 #****************************************************************************************************
-#                1. Optionally prepare a file and its PUF counterpart ####
+#  1. ONETIME PER SYNFILE - Optionally prepare a file and its PUF counterpart ####
 #****************************************************************************************************
 #.. ONLY RUN THIS IF NOT PREVIOUSLY DONE FOR A PARTICULAR SYNTHETIC FILE!! ----
 
@@ -99,9 +104,9 @@ count(synprep$tc.base, ftype)
 saveRDS(synprep, paste0(globals$tc.dir, sfname, "_rwprep.rds"))
 
 
-#****************************************************************************************************
-#                2. Get a previously prepared list for a file, split out the merged files ####
-#****************************************************************************************************
+#******************************************************************************************************************
+#  2. Get previously-prepared synfile-PUF and tax output, merge, and separate PUF and synfile ####
+#******************************************************************************************************************
 sfname <- "synthpop3"
 synprep <- readRDS(paste0(globals$tc.dir, sfname, "_rwprep.rds"))
 
@@ -114,9 +119,9 @@ puf.full <- mrgdf %>% filter(ftype=="puf.full")
 synfile <- mrgdf %>% filter(ftype==sfname)
 
 
-#****************************************************************************************************
-#                3. Define and construct a set of targets (weighted values) from the base file ####
-#****************************************************************************************************
+#******************************************************************************************************************
+#  3. Define and construct a set of targets (weighted values) from the base file ####
+#******************************************************************************************************************
 # create a set of logical rules that will define subsets of the data for which we will define targets
 # and variables that we will target in those subsets, and whether we are targeting
 # their weighted sums or their weighted number of records (can do both)
@@ -137,90 +142,56 @@ agi.ranges <- c(
   "c00100 > 10e6")
 agi.ranges
 
+mars.groups <- c("MARS==1", "MARS==2", "MARS %in% c(3, 4)")
+
 names(synfile) %>% sort
-vars.to.target <- c("wt", "c00100", "e00200", "e00300", "e00650", "e01700", "p23250", "taxbc")
-# vtt <- c("wt", "c00100", "e00200", "e00200p")
-# vtt <- c("wt", "c00100", "e00200", "e00200p", "e00600", "e00650")
-# vtt <- c("wt", "c00100", "e00200", "e00200p", "e00600", "e00650", "p23250")
-# vtt <- c("wt", "c00100", "e00200", "e00200p", "e00600", "e00650", "p23250", "e26270")
+vars.to.target <- c("wt", "c00100", "e00200", "e00300", "e00650", "e00700", "e00900",
+                    "e01100", "e01200", "e01400", "e01700", "e02400",
+                    "p23250", "taxbc")
+
 vars.to.target
 
-# get the cartesian product of income ranges and variables, as data frame
-target.rules.s <- expand.grid(wtvar=vars.to.target, subgroup=agi.ranges, stringsAsFactors = FALSE)
-target.rules.s
+# define target rules in several steps
+# a) define targets for variables by income range, getting cartesian product
+agi.target.rules <- expand.grid(wtvar=vars.to.target, subgroup=agi.ranges, stringsAsFactors = FALSE)
+agi.target.rules
+
+# b) define targets for variables by income range, getting cartesian product
+mars.target.rules <- expand.grid(wtvar=vars.to.target, subgroup=mars.groups, stringsAsFactors = FALSE)
+mars.target.rules
+
+# concatenate the target rules
+target.rules <- bind_rows(agi.target.rules, mars.target.rules)
+target.rules
 
 # add constraint name (a compressed text version of the rules) and constraint number
-target.rules <- target.rules.s %>%
+target.rules <- target.rules %>%
   mutate(constraint.name=paste0(wtvar, "_", str_remove_all(subgroup, " ")),
          constraint.shortname=paste0("con_", row_number()))
 target.rules
 
 
-find_non_feasible_constraints <- function(synfile, target.rules){
-  # find out if any of the constraints are not in the sparse matrix, meaning that the synthetic
-  # file has one or more records that meet the logical criteria for that constraint (e.g., c00100==0)
-  # but all values for the variable to be weighted are zero and thus it is impossible to reweight
-  # and get a different value
-  
-  # There's got to be a better way to find these!
-  
-  constraint.coefficients.dense <- get_constraint_coefficients_dense(synfile, target.rules)
-  constraint.shortname.vec <- names(constraint.coefficients.dense)
-  
-  # put the constraint coefficients into a sparse format that only 
-  # includes non-zero coefficients, in a dataframe that has:
-  #   i -- the constraint number
-  #   constraint.shortname
-  #   j -- the variable number (an index into the vector x)
-  #   value -- the constraint coefficient
-  constraint.coefficients.sparse.df <- constraint.coefficients.dense %>% 
-    mutate(j=row_number()) %>%
-    gather(constraint.shortname, value, -j) %>%
-    mutate(constraint.shortname=
-             factor(constraint.shortname, levels=constraint.shortname.vec), # factor so we can sort in order of appearance in cc.full
-             i=match(constraint.shortname, constraint.shortname.vec)) %>%
-    filter(value!=0) %>%
-    dplyr::select(i, constraint.shortname, j, value) %>%
-    arrange(i, j) # SORT ORDER IS CRITICAL
-  
-  missing.indexes <- which(!target.rules$constraint.shortname %in% 
-                             unique(constraint.coefficients.sparse.df$constraint.shortname))
-  return(missing.indexes)
-}
-
-
-missing.indexes <- find_non_feasible_constraints(synfile, target.rules)
-nonmissing.indexes <- setdiff(1:nrow(target.rules), missing.indexes)
-target.rules[missing.indexes, ]
-target.rules.feasible <- target.rules[nonmissing.indexes, ]
+# some targets may be nonfeasible - we need to remove them
+nonfeasible.indexes <- find_non_feasible_constraints(synfile, target.rules)
+feasible.indexes <- setdiff(1:nrow(target.rules), nonfeasible.indexes)
+target.rules[nonfeasible.indexes, ]
+target.rules.feasible <- target.rules[feasible.indexes, ]
 
 # now get constraint coefficients in the synthetic file
 constraint.coefficients.dense <- get_constraint_coefficients_dense(synfile, target.rules.feasible)
-
-# create the full constraint coeff matrix
-constraint.shortname.vec <- names(constraint.coefficients.dense)
-constraint.shortname.vec
+constraint.coefficients.sparse <- get_constraint_coefficients_sparse_from_dense(constraint.coefficients.dense)
 
 # get the targets - i.e., the constraint righthand side, from the puf
 synfile.rhs <- colSums(constraint.coefficients.dense)
 constraint.rhs <- get_constraint_coefficients_dense(puf.full, target.rules.feasible) %>% colSums
 
-constraint.coefficients.sparse <- constraint.coefficients.dense %>% 
-  mutate(j=row_number()) %>%
-  gather(constraint.shortname, value, -j) %>%
-  mutate(constraint.shortname=
-           factor(constraint.shortname, levels=constraint.shortname.vec), # factor so we can sort in order of appearance in cc.full
-         i=match(constraint.shortname, constraint.shortname.vec)) %>%
-  filter(value!=0) %>%
-  dplyr::select(i, constraint.shortname, j, value) %>%
-  arrange(i, j) # SORT ORDER IS CRITICAL
 # ht(constraint.coefficients.sparse.df)
-length(unique(constraint.coefficients.sparse$constraint.shortname))
+# length(unique(constraint.coefficients.sparse$constraint.shortname))
 
 
-#****************************************************************************************************
-#                # 4. Compare weighted values on synthetic file to target values ####
-#****************************************************************************************************
+#******************************************************************************************************************
+#  4. Compare weighted values on synthetic file to target values ####
+#******************************************************************************************************************
 synfile.vs.targets <- target.rules.feasible %>%
   dplyr::select(constraint.name, constraint.shortname) %>%
   mutate(cnum=row_number(),
@@ -241,6 +212,9 @@ synfile.vs.targets %>%
         digits=c(0, 0, 0, 1, 1, 3), 
         format.args=list(big.mark = ','))
 
+#..Automate the setting of tolerances around constraints based upon rules ----
+# These can be overriden if desired
+
 #.. Establish tentative tolerances around targets based on the above
 # will need to automate this when we hae a lot of targets
 tol.tentative <- rep(.001, nrow(target.rules.feasible))
@@ -253,9 +227,9 @@ tol.tentative[c(1, 72, 5, 64, 62, 65, 70, 54, 8, 78, 56)] <- .15
 tol.tentative
 
 
-#****************************************************************************************************
-#                # 5. Prepare inputs for optimization ####
-#****************************************************************************************************
+#******************************************************************************************************************
+#  5. Prepare inputs for optimization ####
+#******************************************************************************************************************
 
 # make the sparseness structure for the constraint coefficients: 
 #   a list of vectors, where each vector contains the INDICES of the non-zero elements of one row
@@ -296,9 +270,9 @@ xlb <- rep(0, nrow(synfile))
 xub <- rep(2, nrow(synfile))
 
 
-#****************************************************************************************************
-#                6. Run ipoptr to get optimal x values ####
-#****************************************************************************************************
+#******************************************************************************************************************
+#  6. Run ipoptr to get optimal x values ####
+#******************************************************************************************************************
 opts <- list("print_level" = 5,
              "file_print_level" = 5, # integer
              "linear_solver" = "ma57", # mumps pardiso ma27 ma57 ma77 ma86 ma97
@@ -335,11 +309,9 @@ tibble(xopt=result$solution) %>%
   ggtitle("Distribution of x values (ratio of new weight to old weight)")
 
 
-# 5. Construct a new reweighted file, synfile.rwt, that hits the targets
-
-#****************************************************************************************************
-#                7. Construct a new reweighted file, synfile.rwt, that hits the targets ####
-#****************************************************************************************************
+#******************************************************************************************************************
+#  7. Construct a new reweighted file, synfile.rwt, that hits the targets ####
+#******************************************************************************************************************
 synfile.rwt <- synfile %>%
   mutate(ftype=paste0(sfname, ".rwt"),
          wt.rawsyn=wt,
@@ -384,9 +356,9 @@ f("e01700")
 
 
 
-#****************************************************************************************************
-#                8. Save all 3 files as a list, and also as csv to synpuf ####
-#****************************************************************************************************
+#******************************************************************************************************************
+#  8. Save all 3 files as a list, and also as csv to synpuf ####
+#******************************************************************************************************************
 glimpse(stack)
 
 

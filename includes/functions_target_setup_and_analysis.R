@@ -48,14 +48,52 @@ prep_for_reweighting <- function(sfname) {
 
 
 #****************************************************************************************************
-#                more functions ####
+#                target functions ####
 #****************************************************************************************************
-get_constraint_coefficients_dense <- function(df, target.rules, wtvar="wt") {
+
+find_non_feasible_constraints <- function(synfile, target.rules){
+  # find out if any of the constraints are not in the sparse matrix, meaning that the synthetic
+  # file has one or more records that meet the logical criteria for that constraint (e.g., c00100==0)
+  # but all values for the variable to be weighted are zero and thus it is impossible to reweight
+  # and get a different value
+  
+  # There's got to be a better way to find these!
+  
+  constraint.coefficients.dense <- get_constraint_coefficients_dense(synfile, target.rules)
+  constraint.shortname.vec <- names(constraint.coefficients.dense)
+  
+  # put the constraint coefficients into a sparse format that only 
+  # includes non-zero coefficients, in a dataframe that has:
+  #   i -- the constraint number
+  #   constraint.shortname
+  #   j -- the variable number (an index into the vector x)
+  #   value -- the constraint coefficient
+  constraint.coefficients.sparse.df <- constraint.coefficients.dense %>% 
+    mutate(j=row_number()) %>%
+    gather(constraint.shortname, value, -j) %>%
+    mutate(constraint.shortname=
+             factor(constraint.shortname, levels=constraint.shortname.vec), # factor so we can sort in order of appearance in cc.full
+           i=match(constraint.shortname, constraint.shortname.vec)) %>%
+    filter(value!=0) %>%
+    dplyr::select(i, constraint.shortname, j, value) %>%
+    arrange(i, j) # SORT ORDER IS CRITICAL
+  
+  missing.indexes <- which(!target.rules$constraint.shortname %in% 
+                             unique(constraint.coefficients.sparse.df$constraint.shortname))
+  return(missing.indexes)
+}
+
+
+#****************************************************************************************************
+#                constraint coefficient functions ####
+#****************************************************************************************************
+
+get_constraint_coefficients_dense <- function(synfile, target.rules, wtvar="wt") {
   # get constraint coefficients -- how the value of a target changes when the weight changes
   # create an R expression for these rules so that we can use them in code
   rules <- parse(text=target.rules$subgroup)
   
-  cc.base <- df
+  cc.base <- synfile
   for(i in 1:nrow(target.rules)){
     vname <- target.rules$constraint.shortname[i]
     if(target.rules$wtvar[i]==wtvar) mult <- rep(1, nrow(cc.base)) else
@@ -64,5 +102,21 @@ get_constraint_coefficients_dense <- function(df, target.rules, wtvar="wt") {
   }
   cc.full <- cc.base %>% dplyr::select(one_of(target.rules$constraint.shortname))
   return(cc.full)
+}
+
+
+get_constraint_coefficients_sparse_from_dense <- function(constraint.coefficients.dense){
+  constraint.shortname.vec <- names(constraint.coefficients.dense)
+  constraint.shortname.vec
+  
+  constraint.coefficients.sparse <- constraint.coefficients.dense %>% 
+    mutate(j=row_number()) %>%
+    gather(constraint.shortname, value, -j) %>%
+    mutate(constraint.shortname=
+             factor(constraint.shortname, levels=constraint.shortname.vec), # factor so we can sort in order of appearance in cc.full
+           i=match(constraint.shortname, constraint.shortname.vec)) %>%
+    filter(value!=0) %>%
+    dplyr::select(i, constraint.shortname, j, value) %>%
+    arrange(i, j) # SORT ORDER IS CRITICAL
 }
 
