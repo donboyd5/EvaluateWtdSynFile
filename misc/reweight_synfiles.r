@@ -126,6 +126,7 @@ synfile <- mrgdf %>% filter(ftype==sfname)
 # and variables that we will target in those subsets, and whether we are targeting
 # their weighted sums or their weighted number of records (can do both)
 
+
 #..Define targets (constraints) ----
 # create strings that define logical rules we will apply
 agi.ranges <- c(
@@ -140,18 +141,28 @@ agi.ranges <- c(
   "c00100 > 500e3 & c00100 <= 1e6",
   "c00100 > 1e6 & c00100 <= 10e6",
   "c00100 > 10e6")
+agi.ranges <- parens(agi.ranges)
 agi.ranges
 
 mars.groups <- c("MARS==1", "MARS==2", "MARS %in% c(3, 4)")
+mars.groups <- parens(mars.groups)
+mars.groups
+
+# cross these two groups
+agi.mars.cross <- expand.grid(a=agi.ranges, b=mars.groups, stringsAsFactors = FALSE) %>%
+  mutate(amcross=paste0(a, " & ", b),
+         amcross=parens(amcross)) %>%
+  .[["amcross"]]
+agi.mars.cross   
+
 
 names(synfile) %>% sort
 vars.to.target <- c("wt", "c00100", "e00200", "e00300", "e00650", "e00700", "e00900",
                     "e01100", "e01200", "e01400", "e01700", "e02400",
                     "p23250", "taxbc")
-
 vars.to.target
 
-# define target rules in several steps
+# define target rules in several steps or optionally use the crossed values
 # a) define targets for variables by income range, getting cartesian product
 agi.target.rules <- expand.grid(wtvar=vars.to.target, subgroup=agi.ranges, stringsAsFactors = FALSE)
 agi.target.rules
@@ -164,18 +175,21 @@ mars.target.rules
 target.rules <- bind_rows(agi.target.rules, mars.target.rules)
 target.rules
 
+# alternatively use the crossed values
+target.rules <- expand.grid(wtvar=vars.to.target, subgroup=agi.mars.cross, stringsAsFactors = FALSE)
+
 # add constraint name (a compressed text version of the rules) and constraint number
-target.rules <- target.rules %>%
-  mutate(constraint.name=paste0(wtvar, "_", str_remove_all(subgroup, " ")),
-         constraint.shortname=paste0("con_", row_number()))
+target.rules <- add_rulenames(target.rules)
 target.rules
 
-
 # some targets may be nonfeasible - we need to remove them
-nonfeasible.indexes <- find_non_feasible_constraints(synfile, target.rules)
-feasible.indexes <- setdiff(1:nrow(target.rules), nonfeasible.indexes)
-target.rules[nonfeasible.indexes, ]
-target.rules.feasible <- target.rules[feasible.indexes, ]
+feasability.list <- find_non_feasible_constraints(synfile, target.rules) # make this faster
+names(feasability.list)
+
+length(feasability.list$nonfeasible.indexes)
+target.rules[feasability.list$nonfeasible.indexes, ]
+
+target.rules.feasible <- feasability.list$target.rules.feasible
 
 # now get constraint coefficients in the synthetic file
 constraint.coefficients.dense <- get_constraint_coefficients_dense(synfile, target.rules.feasible)
@@ -184,9 +198,6 @@ constraint.coefficients.sparse <- get_constraint_coefficients_sparse_from_dense(
 # get the targets - i.e., the constraint righthand side, from the puf
 synfile.rhs <- colSums(constraint.coefficients.dense)
 constraint.rhs <- get_constraint_coefficients_dense(puf.full, target.rules.feasible) %>% colSums
-
-# ht(constraint.coefficients.sparse.df)
-# length(unique(constraint.coefficients.sparse$constraint.shortname))
 
 
 #******************************************************************************************************************
@@ -197,34 +208,38 @@ synfile.vs.targets <- target.rules.feasible %>%
   mutate(cnum=row_number(),
          target.value=constraint.rhs / 1e6,
          syn.value=synfile.rhs / 1e6,
-         pdiff=syn.value / target.value * 100 - 100)
+         pdiff=syn.value / target.value * 100 - 100,
+         apdiff=abs(pdiff))
 
 synfile.vs.targets %>%
   kable(caption="Target and synthetic weighted sums in $ millions, plus syn % diff from target",
-        digits=c(0, 0, 0, 1, 1, 3), 
+        digits=c(0, 0, 0, 1, 1, 3, 1), 
         format.args=list(big.mark = ','))
 
 synfile.vs.targets %>%
-  arrange(-abs(pdiff)) %>%
+  arrange(-apdiff) %>%
   filter(row_number() <= 25) %>%
   kable(caption="Target and synthetic weighted sums in $ millions, plus syn % diff from target,
         top up-to-25 worst differences",
-        digits=c(0, 0, 0, 1, 1, 3), 
+        digits=c(0, 0, 0, 1, 1, 3, 1), 
         format.args=list(big.mark = ','))
 
 #..Automate the setting of tolerances around constraints based upon rules ----
 # These can be overriden if desired
+synfile.vs.targets <- synfile.vs.targets %>%
+  mutate(tol.default=case_when(apdiff >= 200 ~ Inf,
+                               apdiff >= 100 & apdiff < 200  ~ .8,
+                               apdiff >= 50 & apdiff < 100 ~ .25,
+                               apdiff >= 25 & apdiff < 50 ~ .10,
+                               apdiff >= 10 & apdiff < 25 ~ .02,
+                               TRUE ~ .001),
+         tol=tol.default)
+synfile.vs.targets %>% arrange(-apdiff)
+count(synfile.vs.targets, tol.default)
 
-#.. Establish tentative tolerances around targets based on the above
-# will need to automate this when we hae a lot of targets
-tol.tentative <- rep(.001, nrow(target.rules.feasible))
-# tol.tentative[c(9, 8, 12)] <- Inf
-# tol.tentative[c(3, 6, 2, 5)] <- .5
-# tol.tentative[c(1, 49, 51, 55, 53, 43, 7, 10, 61)] <- .1
-tol.tentative[c(10, 9, 80)] <- Inf
-tol.tentative[c(17, 6, 3, 7, 2)] <- .4
-tol.tentative[c(1, 72, 5, 64, 62, 65, 70, 54, 8, 78, 56)] <- .15
-tol.tentative
+# override the tolerance defaults based upon possibly subequent analysis of violations
+synfile.vs.targets$tol[c(110, 378, 392, 406)] <- .75
+
 
 
 #******************************************************************************************************************
@@ -234,17 +249,15 @@ tol.tentative
 # make the sparseness structure for the constraint coefficients: 
 #   a list of vectors, where each vector contains the INDICES of the non-zero elements of one row
 # cc.sparse.stru <- make.sparse(cc.full %>% as.matrix) # SLOW
-cc.sparse.struc <- make.sparse.struc(constraint.coefficients.dense %>% as.matrix %>% t)
-# cc.sparse.struc.nonmissing <- make.sparse.struc.nonempty(constraint.coefficients %>% as.matrix %>% t)
-
-length(cc.sparse.struc) - nrow(target.rules.feasible) # must equal number of constraints
+cc.sparse.structure <- make.sparse.structure(constraint.coefficients.dense %>% as.matrix %>% t)
+length(cc.sparse.structure) - nrow(target.rules.feasible) # must equal number of constraints
 
 # now prepare the inputs for ipopt
 inputs <- list()
 inputs$p <- 2
 inputs$wt <- synfile$wt
 inputs$constraint.coefficients.sparse <- constraint.coefficients.sparse
-inputs$eval_jac_g_structure <- cc.sparse.struc
+inputs$eval_jac_g_structure <- cc.sparse.structure
 inputs$eval_h_structure <- lapply(1:length(inputs$wt), function(x) x) # diagonal elements of our Hessian
 
 #.. Establish tolerances around the targets, if desired ----
@@ -253,7 +266,7 @@ inputs$eval_h_structure <- lapply(1:length(inputs$wt), function(x) x) # diagonal
 # choose tolerances based on our earlier looks at the data
 # tol <- rep(.001, length(nonmissing.indexes)) # an alternative
 
-tol <- tol.tentative
+tol <- synfile.vs.targets$tol
 clb <- constraint.rhs - abs(constraint.rhs) * tol
 cub <- constraint.rhs + abs(constraint.rhs) * tol
 
@@ -266,8 +279,8 @@ synfile.vs.targets %>%
 
 # set starting x values (adjustment factor), plus bounds on the x values
 x0 <- rep(1, nrow(synfile))
-xlb <- rep(0, nrow(synfile))
-xub <- rep(2, nrow(synfile))
+xlb <- rep(0.1, nrow(synfile))
+xub <- rep(3, nrow(synfile))
 
 
 #******************************************************************************************************************
@@ -276,7 +289,7 @@ xub <- rep(2, nrow(synfile))
 opts <- list("print_level" = 5,
              "file_print_level" = 5, # integer
              "linear_solver" = "ma57", # mumps pardiso ma27 ma57 ma77 ma86 ma97
-             "max_iter"=100,
+             "max_iter"=500,
              "output_file" = "syntarget.out")
 
 result <- ipoptr(x0 = x0,
@@ -294,8 +307,25 @@ result <- ipoptr(x0 = x0,
               opts = opts,
               inputs = inputs)
 
+names(result)
 
-# take a quick look at the resulting x values
+# IF the result is infeasible, compare constraints to bounds ----
+check <- tibble(cnum=synfile.vs.targets$cnum,
+                     name=synfile.vs.targets$constraint.name,
+                     target=constraint.rhs,
+                     lb=clb,
+                     result=result$constraints,
+                     ub=cub) %>%
+  mutate(violation=case_when(result < lb ~ lb - result,
+                             result > ub ~ ub - result,
+                             TRUE ~ 0),
+         vpct=violation / target * 100)
+violations <-  check %>%
+  filter(violation!=0)
+violations %>% left_join(synfile.vs.targets %>% select(name=constraint.name, pdiff, tol.default, tol))
+
+
+# If optimal take a quick look at the resulting x values ----
 # str(result)
 # result$solution
 quantile(result$solution, probs=c(0, .01, .05, .10, .25, .5, .75, .9, .95, .99, 1))
@@ -304,7 +334,7 @@ tibble(xopt=result$solution) %>%
   ggplot(aes(xopt)) +
   geom_histogram(binwidth=.001, fill="blue") +
   geom_vline(xintercept = 1) +
-  scale_x_continuous(breaks=seq(0, 2, .05)) +
+  scale_x_continuous(breaks=seq(0, 20, .05)) +
   theme(axis.text.x=element_text(size=8, angle=30)) +
   ggtitle("Distribution of x values (ratio of new weight to old weight)")
 
@@ -334,7 +364,7 @@ comps <- stack %>%
   summarise_at(vars(wtvar, c00100, taxbc, e00200, e01700), funs(sum(. * wt) / 1e9))
 comps
 
-f <- function(var) {
+f.agi <- function(var) {
   comps %>%
     dplyr::select(ftype, agirange, value=var) %>%
     spread(ftype, value) %>%
@@ -348,18 +378,98 @@ f <- function(var) {
           digits=c(rep(1, 8), 0), 
           format.args=list(big.mark = ','))
 }
-f("wtvar")
-f("c00100")
-f("e00200")
-f("taxbc")
-f("e01700")
+f.agi("wtvar")
+f.agi("c00100")
+f.agi("e00200")
+f.agi("taxbc")
 
 
+comps.m <- stack %>%
+  mutate(mstat=factor(MARS, levels=c(1:4), labels=c("single", "married", "other", "other")),
+         wtvar=1e9) %>%
+  group_by(ftype, mstat) %>%
+  summarise_at(vars(wtvar, c00100, taxbc, e00200, e01700), funs(sum(. * wt) / 1e9))
+comps.m
+
+f.mstat <- function(var) {
+  comps.m %>%
+    dplyr::select(ftype, mstat, value=var) %>%
+    spread(ftype, value) %>%
+    janitor:: adorn_totals(where="row") %>%
+    mutate(syn.diff=.[[3]] - puf.full,
+           rwt.diff=.[[4]] - puf.full,
+           syn.pdiff=syn.diff / puf.full * 100,
+           rwt.pdiff=rwt.diff / puf.full * 100,
+           var=var) %>%
+    kable(caption="Comparison of puf, synfile, and reweighted synfile",
+          digits=c(rep(1, 8), 0), 
+          format.args=list(big.mark = ','))
+}
+f.mstat("wtvar")
+f.mstat("c00100")
+f.mstat("e00200")
+f.mstat("taxbc")
+
+
+comps.agim <- stack %>%
+  mutate(agirange=cut(c00100, agiranges, right=FALSE),
+         mstat=factor(MARS, levels=c(1:4), labels=c("single", "married", "other", "other")),
+         wtvar=1e9) %>%
+  group_by(ftype, agirange, mstat) %>%
+  summarise_at(vars(wtvar, c00100, taxbc, e00200, e01700), funs(sum(. * wt) / 1e9)) %>%
+  ungroup
+comps.agim
+
+f.agim <- function(var, mstat.use) {
+  comps.agim %>%
+    dplyr::select(ftype, agirange, mstat, value=var) %>%
+    filter(mstat==mstat.use) %>%
+    spread(ftype, value) %>%
+    janitor:: adorn_totals(where="row") %>%
+    mutate(syn.diff=.[[4]] - puf.full,
+           rwt.diff=.[[5]] - puf.full,
+           syn.pdiff=syn.diff / puf.full * 100,
+           rwt.pdiff=rwt.diff / puf.full * 100,
+           var=var) %>%
+    kable(caption="Comparison of puf, synfile, and reweighted synfile",
+          digits=c(0, 0, rep(1, 7), 0), 
+          format.args=list(big.mark = ','))
+}
+f.agim("wtvar", "single")
+f.agim("wtvar", "married")
+f.agim("wtvar", "other")
+
+f.agim("c00100", "single")
+f.agim("c00100", "married")
+f.agim("c00100", "other")
+
+f.agim("e00200", "single")
+f.agim("e00200", "married")
+f.agim("e00200", "other")
+
+f.agim("taxbc", "single")
+f.agim("taxbc", "married")
+f.agim("taxbc", "other")
+
+glimpse(target.rules.feasible)
+target.rules.feasible$subgroup
+
+target.rules.feasible %>% filter(subgroup=="((c00100 > 500e3 & c00100 <= 1e6) & (MARS==1))")
+synfile.vs.targets[103, ]
+check[103, ]
 
 #******************************************************************************************************************
 #  8. Save all 3 files as a list, and also as csv to synpuf ####
 #******************************************************************************************************************
 glimpse(stack)
+count(stack, ftype)
+saveRDS(stack, paste0(globals$tc.dir, sfname, "_reweighted_stackedfiles.rds"))
+
+fnout <- function(fileid) paste0(globals$synd, sfname, "_", fileid, ".csv")
+fnout("puf")
+write_csv(stack %>% filter(ftype=="puf.full"), fnout("puf"))
+write_csv(stack %>% filter(ftype==sfname), fnout("syn"))
+write_csv(stack %>% filter(ftype==paste0(sfname, ".rwt")), fnout("rwt"))
 
 
 

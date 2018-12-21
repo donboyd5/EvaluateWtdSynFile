@@ -4,23 +4,13 @@
 #                Fast function to get the sparsity structure of a matrix ####
 #****************************************************************************************************
 
-make.sparse.struc <- function(A) {
+make.sparse.structure <- function(A) {
+  # return a list with indexes for nonzero constraint coefficients
   # this is much faster than the make.sparse function in ipoptr
   f <- function(x) which(x!=0, arr.ind=TRUE)
   rownames(A) <- NULL # just to be safe
   S <- apply(A, 1, f)
   S <- as.list(S)
-  return(S)
-}
-
-
-make.sparse.struc.nonempty <- function(A) {
-  # this is much faster than the make.sparse function in ipoptr
-  f <- function(x) which(x!=0, arr.ind=TRUE)
-  rownames(A) <- NULL # just to be safe
-  S <- apply(A, 1, f)
-  S <- as.list(S)
-  S <- S[lapply(S, length) > 0] 
   return(S)
 }
 

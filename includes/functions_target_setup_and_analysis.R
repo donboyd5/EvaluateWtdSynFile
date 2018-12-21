@@ -48,8 +48,37 @@ prep_for_reweighting <- function(sfname) {
 
 
 #****************************************************************************************************
-#                target functions ####
+#                target preparation functions ####
 #****************************************************************************************************
+
+add_rulenames <- function(target.rules){
+  target.rules <- target.rules %>%
+    mutate(constraint.name=paste0(wtvar, "_", str_remove_all(subgroup, " ")),
+           constraint.shortname=paste0("con_", row_number()))
+  return(target.rules)
+}
+
+
+#****************************************************************************************************
+#                constraint coefficient functions ####
+#****************************************************************************************************
+
+get_constraint_coefficients_dense <- function(synfile, target.rules, wtvar="wt") {
+  # get constraint coefficients -- how the value of a target changes when the weight changes
+  
+  rules <- parse(text=target.rules$subgroup) # R logical expression for rules used in eval below
+  
+  cc.base <- synfile
+  for(i in 1:nrow(target.rules)){
+    vname <- target.rules$constraint.shortname[i]
+    if(target.rules$wtvar[i]==wtvar) mult <- rep(1, nrow(cc.base)) else
+      mult <- cc.base[[target.rules$wtvar[i]]]
+    cc.base[[vname]] <- with(cc.base, eval(rules[i]) * wt) * mult
+  }
+  cc.dense <- cc.base %>% dplyr::select(one_of(target.rules$constraint.shortname))
+  return(cc.dense)
+}
+
 
 find_non_feasible_constraints <- function(synfile, target.rules){
   # find out if any of the constraints are not in the sparse matrix, meaning that the synthetic
@@ -78,30 +107,15 @@ find_non_feasible_constraints <- function(synfile, target.rules){
     dplyr::select(i, constraint.shortname, j, value) %>%
     arrange(i, j) # SORT ORDER IS CRITICAL
   
-  missing.indexes <- which(!target.rules$constraint.shortname %in% 
-                             unique(constraint.coefficients.sparse.df$constraint.shortname))
-  return(missing.indexes)
-}
-
-
-#****************************************************************************************************
-#                constraint coefficient functions ####
-#****************************************************************************************************
-
-get_constraint_coefficients_dense <- function(synfile, target.rules, wtvar="wt") {
-  # get constraint coefficients -- how the value of a target changes when the weight changes
-  # create an R expression for these rules so that we can use them in code
-  rules <- parse(text=target.rules$subgroup)
+  # return a list of 3 items
+  feasability.list <- list()
+  feasability.list$nonfeasible.indexes <- which(!target.rules$constraint.shortname %in% 
+                                                  unique(constraint.coefficients.sparse.df$constraint.shortname))
+  feasability.list$feasible.indexes <- setdiff(1:nrow(target.rules), nonfeasible.indexes)
   
-  cc.base <- synfile
-  for(i in 1:nrow(target.rules)){
-    vname <- target.rules$constraint.shortname[i]
-    if(target.rules$wtvar[i]==wtvar) mult <- rep(1, nrow(cc.base)) else
-      mult <- cc.base[[target.rules$wtvar[i]]]
-    cc.base[[vname]] <- with(cc.base, eval(rules[i]) * wt) * mult
-  }
-  cc.full <- cc.base %>% dplyr::select(one_of(target.rules$constraint.shortname))
-  return(cc.full)
+  feasability.list$target.rules.feasible <- add_rulenames(target.rules[feasible.indexes, ])
+  
+  return(feasability.list)
 }
 
 
