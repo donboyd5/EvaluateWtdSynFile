@@ -1,4 +1,4 @@
-# 12/20/2018
+# 12/21/2018
 
 # This program reweights a synthetic file so that it will hit targets in a base file, typically the PUF.
 
@@ -20,10 +20,6 @@
 #      while satisfying constraints that ensure that the targets are hit (or that results are within defined tolerances)
 #    - Construct synfile.rwt by adjusting the wt variable (and save the raw synthesized weight as wt.rawsyn)
 # 8. Save all 3 files as a list, and also as csv to synpuf
-
-# 6. Do simple comparisons of base, synfile, and synfile.rwt
-# 7. Save the resulting synfile.rwt so that it can be analyzed further
-
 
 
 #****************************************************************************************************
@@ -183,13 +179,13 @@ target.rules <- add_rulenames(target.rules)
 target.rules
 
 # some targets may be nonfeasible - we need to remove them
-feasability.list <- find_non_feasible_constraints(synfile, target.rules) # make this faster
-names(feasability.list)
+feasibility.list <- find_non_feasible_constraints(synfile, target.rules) # make this faster
+names(feasibility.list)
 
-length(feasability.list$nonfeasible.indexes)
-target.rules[feasability.list$nonfeasible.indexes, ]
+length(feasibility.list$nonfeasible.indexes)
+target.rules[feasibility.list$nonfeasible.indexes, ]
 
-target.rules.feasible <- feasability.list$target.rules.feasible
+target.rules.feasible <- feasibility.list$target.rules.feasible
 
 # now get constraint coefficients in the synthetic file
 constraint.coefficients.dense <- get_constraint_coefficients_dense(synfile, target.rules.feasible)
@@ -292,6 +288,7 @@ opts <- list("print_level" = 5,
              "max_iter"=500,
              "output_file" = "syntarget.out")
 
+a <- proc.time()
 result <- ipoptr(x0 = x0,
               lb = xlb,
               ub = xub,
@@ -306,6 +303,8 @@ result <- ipoptr(x0 = x0,
               constraint_ub = cub,
               opts = opts,
               inputs = inputs)
+b <- proc.time()
+b - a
 
 names(result)
 
@@ -320,6 +319,7 @@ check <- tibble(cnum=synfile.vs.targets$cnum,
                              result > ub ~ ub - result,
                              TRUE ~ 0),
          vpct=violation / target * 100)
+
 violations <-  check %>%
   filter(violation!=0)
 violations %>% left_join(synfile.vs.targets %>% select(name=constraint.name, pdiff, tol.default, tol))

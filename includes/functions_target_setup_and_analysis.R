@@ -108,14 +108,14 @@ find_non_feasible_constraints <- function(synfile, target.rules){
     arrange(i, j) # SORT ORDER IS CRITICAL
   
   # return a list of 3 items
-  feasability.list <- list()
-  feasability.list$nonfeasible.indexes <- which(!target.rules$constraint.shortname %in% 
+  feasibility.list <- list()
+  feasibility.list$nonfeasible.indexes <- which(!target.rules$constraint.shortname %in% 
                                                   unique(constraint.coefficients.sparse.df$constraint.shortname))
-  feasability.list$feasible.indexes <- setdiff(1:nrow(target.rules), nonfeasible.indexes)
+  feasibility.list$feasible.indexes <- setdiff(1:nrow(target.rules), feasibility.list$nonfeasible.indexes)
   
-  feasability.list$target.rules.feasible <- add_rulenames(target.rules[feasible.indexes, ])
+  feasibility.list$target.rules.feasible <- add_rulenames(target.rules[feasibility.list$feasible.indexes, ])
   
-  return(feasability.list)
+  return(feasibility.list)
 }
 
 
