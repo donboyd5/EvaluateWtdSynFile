@@ -178,6 +178,52 @@ target.rules <- expand.grid(wtvar=vars.to.target, subgroup=agi.mars.cross, strin
 target.rules <- add_rulenames(target.rules)
 target.rules
 
+
+# attempt to write a fast routine to get sparse constraint coefficients ----
+rules <- parse(text=target.rules$subgroup) # R logical expression for rules used in eval below
+# get a rule
+# make a df, including only nonzero cc
+i <- 1
+wtvar <- "wt"
+vname <- target.rules$constraint.shortname[i]
+if(target.rules$wtvar[i]==wtvar) mult <- rep(1, nrow(synfile)) else
+  mult <- synfile[[target.rules$wtvar[i]]]
+vec <- with(synfile, eval(rules[i]) * wt) * mult
+nz <- which(vec!=0)
+vec[nz[1:10]]
+if(length(nz)>0){
+  df <- tibble(i=i, j=nz, cc=vec[nz], cname=target.rules$constraint.shortname[i])
+}
+
+ccf <- function(i, synfile, target.rules, wtvar="wt"){
+  if(target.rules$wtvar[i]==wtvar) mult <- rep(1, nrow(synfile)) else
+    mult <- synfile[[target.rules$wtvar[i]]]
+  vec <- with(synfile, eval(rules[i]) * wt) * mult
+  nz <- which(vec!=0)
+  vec[nz[1:10]]
+  if(length(nz)>0){
+    df <- tibble(i=i, j=nz, cc=vec[nz], cname=target.rules$constraint.shortname[i])
+  }
+  return(df)
+}
+
+system.time(df <- ldply(1:nrow(target.rules), ccf, synfile, target.rules))
+ht(df)
+length(unique(df$cname))
+
+
+glimpse(df)
+
+cc.base <- synfile
+for(i in 1:nrow(target.rules)){
+  vname <- target.rules$constraint.shortname[i]
+  if(target.rules$wtvar[i]==wtvar) mult <- rep(1, nrow(cc.base)) else
+    mult <- cc.base[[target.rules$wtvar[i]]]
+  cc.base[[vname]] <- with(cc.base, eval(rules[i]) * wt) * mult
+}
+
+# end of attempt ----
+
 # some targets may be nonfeasible - we need to remove them
 feasibility.list <- find_non_feasible_constraints(synfile, target.rules) # make this faster
 names(feasibility.list)
