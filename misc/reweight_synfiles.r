@@ -1,4 +1,4 @@
-# 12/21/2018
+# 12/24/2018
 
 # This program reweights a synthetic file so that it will hit targets in a base file, typically the PUF.
 
@@ -174,91 +174,44 @@ target.rules
 # alternatively use the crossed values
 target.rules <- expand.grid(wtvar=vars.to.target, subgroup=agi.mars.cross, stringsAsFactors = FALSE)
 
-# add constraint name (a compressed text version of the rules) and constraint number
+
+# once target.rules are prepared, add names
 target.rules <- add_rulenames(target.rules)
 target.rules
 
 
-# attempt to write a fast routine to get sparse constraint coefficients ----
-rules <- parse(text=target.rules$subgroup) # R logical expression for rules used in eval below
-# get a rule
-# make a df, including only nonzero cc
-i <- 1
-wtvar <- "wt"
-vname <- target.rules$constraint.shortname[i]
-if(target.rules$wtvar[i]==wtvar) mult <- rep(1, nrow(synfile)) else
-  mult <- synfile[[target.rules$wtvar[i]]]
-vec <- with(synfile, eval(rules[i]) * wt) * mult
-nz <- which(vec!=0)
-vec[nz[1:10]]
-if(length(nz)>0){
-  df <- tibble(i=i, j=nz, cc=vec[nz], cname=target.rules$constraint.shortname[i])
-}
+system.time(cc.sparse <- get_constraint_coefficients_sparse(synfile, target.rules))
+names(cc.sparse)
+constraint.coefficients.sparse <- cc.sparse$nzcc
+target.rules.enhanced <- cc.sparse$enhanced.targets
 
-ccf <- function(i, synfile, target.rules, wtvar="wt"){
-  if(target.rules$wtvar[i]==wtvar) mult <- rep(1, nrow(synfile)) else
-    mult <- synfile[[target.rules$wtvar[i]]]
-  vec <- with(synfile, eval(rules[i]) * wt) * mult
-  nz <- which(vec!=0)
-  vec[nz[1:10]]
-  if(length(nz)>0){
-    df <- tibble(i=i, j=nz, cc=vec[nz], cname=target.rules$constraint.shortname[i])
-  }
-  return(df)
-}
+ht(constraint.coefficients.sparse)
 
-system.time(df <- ldply(1:nrow(target.rules), ccf, synfile, target.rules))
-ht(df)
-length(unique(df$cname))
-
-
-glimpse(df)
-
-cc.base <- synfile
-for(i in 1:nrow(target.rules)){
-  vname <- target.rules$constraint.shortname[i]
-  if(target.rules$wtvar[i]==wtvar) mult <- rep(1, nrow(cc.base)) else
-    mult <- cc.base[[target.rules$wtvar[i]]]
-  cc.base[[vname]] <- with(cc.base, eval(rules[i]) * wt) * mult
-}
-
-# end of attempt ----
-
-# some targets may be nonfeasible - we need to remove them
-feasibility.list <- find_non_feasible_constraints(synfile, target.rules) # make this faster
-names(feasibility.list)
-
-length(feasibility.list$nonfeasible.indexes)
-target.rules[feasibility.list$nonfeasible.indexes, ]
-
-target.rules.feasible <- feasibility.list$target.rules.feasible
-
-# now get constraint coefficients in the synthetic file
-constraint.coefficients.dense <- get_constraint_coefficients_dense(synfile, target.rules.feasible)
-constraint.coefficients.sparse <- get_constraint_coefficients_sparse_from_dense(constraint.coefficients.dense)
-
-# get the targets - i.e., the constraint righthand side, from the puf
-synfile.rhs <- colSums(constraint.coefficients.dense)
-constraint.rhs <- get_constraint_coefficients_dense(puf.full, target.rules.feasible) %>% colSums
+# retrieve vector with the constraint values for the synfile, and compute the vector for the puf
+synfile.rhs <- cc.sparse$enhanced.targets$synfile.rhs
+system.time(constraint.rhs <- get_constraint_sums(puf.full, target.rules))
 
 
 #******************************************************************************************************************
 #  4. Compare weighted values on synthetic file to target values ####
 #******************************************************************************************************************
-synfile.vs.targets <- target.rules.feasible %>%
-  dplyr::select(constraint.name, constraint.shortname) %>%
-  mutate(cnum=row_number(),
-         target.value=constraint.rhs / 1e6,
-         syn.value=synfile.rhs / 1e6,
+synfile.vs.targets <- target.rules.enhanced %>%
+  dplyr::select(constraint.name, constraint.shortname, feasible) %>%
+  mutate(target.value=constraint.rhs,
+         syn.value=synfile.rhs,
          pdiff=syn.value / target.value * 100 - 100,
          apdiff=abs(pdiff))
 
-synfile.vs.targets %>%
+targ.comp <- synfile.vs.targets %>%
+  mutate(target.value=target.value / 1e6,
+         syn.value=syn.value / 1e6)
+
+targ.comp %>%
   kable(caption="Target and synthetic weighted sums in $ millions, plus syn % diff from target",
         digits=c(0, 0, 0, 1, 1, 3, 1), 
         format.args=list(big.mark = ','))
 
-synfile.vs.targets %>%
+targ.comp  %>%
   arrange(-apdiff) %>%
   filter(row_number() <= 25) %>%
   kable(caption="Target and synthetic weighted sums in $ millions, plus syn % diff from target,
@@ -266,33 +219,48 @@ synfile.vs.targets %>%
         digits=c(0, 0, 0, 1, 1, 3, 1), 
         format.args=list(big.mark = ','))
 
+
 #..Automate the setting of tolerances around constraints based upon rules ----
+# They may need some tinkering with
 # These can be overriden if desired
+tolerances <- read_csv(
+"apdiff.lb, tol.default
+0, .001
+5, .01
+10, .03
+20, .05
+50, .4
+75, .6
+100, 1
+200, Inf
+Inf, Inf")
+tolerances <- tolerances %>% mutate(apdiff.ub=lead(apdiff.lb)) %>% select(starts_with("ap"), tol.default)
+tolerances
+
 synfile.vs.targets <- synfile.vs.targets %>%
-  mutate(tol.default=case_when(apdiff >= 200 ~ Inf,
-                               apdiff >= 100 & apdiff < 200  ~ .8,
-                               apdiff >= 50 & apdiff < 100 ~ .25,
-                               apdiff >= 25 & apdiff < 50 ~ .10,
-                               apdiff >= 10 & apdiff < 25 ~ .02,
-                               TRUE ~ .001),
+  mutate(tol.group=cut(apdiff, tolerances$apdiff.lb, include.lowest = TRUE),
+         tol.group=addNA(tol.group),
+         tol.default=tolerances$tol.default[as.integer(tol.group)],
          tol=tol.default)
-synfile.vs.targets %>% arrange(-apdiff)
-count(synfile.vs.targets, tol.default)
+summary(synfile.vs.targets)
+count(synfile.vs.targets, tol.group, tol.default)
+
 
 # override the tolerance defaults based upon possibly subequent analysis of violations
-synfile.vs.targets$tol[c(110, 378, 392, 406)] <- .75
-
+# synfile.vs.targets$tol[c(110, 378, 392, 406)] <- .75
 
 
 #******************************************************************************************************************
 #  5. Prepare inputs for optimization ####
 #******************************************************************************************************************
 
+feasible.targets <- synfile.vs.targets %>%
+  filter(feasible)
+
 # make the sparseness structure for the constraint coefficients: 
 #   a list of vectors, where each vector contains the INDICES of the non-zero elements of one row
-# cc.sparse.stru <- make.sparse(cc.full %>% as.matrix) # SLOW
-cc.sparse.structure <- make.sparse.structure(constraint.coefficients.dense %>% as.matrix %>% t)
-length(cc.sparse.structure) - nrow(target.rules.feasible) # must equal number of constraints
+cc.sparse.structure <- make.sparse.structure.from.nzcc(constraint.coefficients.sparse)
+length(cc.sparse.structure) - nrow(feasible.targets) # must equal number of constraints
 
 # now prepare the inputs for ipopt
 inputs <- list()
@@ -302,19 +270,16 @@ inputs$constraint.coefficients.sparse <- constraint.coefficients.sparse
 inputs$eval_jac_g_structure <- cc.sparse.structure
 inputs$eval_h_structure <- lapply(1:length(inputs$wt), function(x) x) # diagonal elements of our Hessian
 
-#.. Establish tolerances around the targets, if desired ----
-# establish constraint lower bounds (clb) and upper bounds (cub) 
-# based on tolerances if any around the constraints
-# choose tolerances based on our earlier looks at the data
-# tol <- rep(.001, length(nonmissing.indexes)) # an alternative
-
-tol <- synfile.vs.targets$tol
-clb <- constraint.rhs - abs(constraint.rhs) * tol
-cub <- constraint.rhs + abs(constraint.rhs) * tol
+# Define constraint lower bounds (clb) and upper bounds (cub) based on tolerances established earlier
+tol <- feasible.targets$tol
+clb <- feasible.targets$target.value - abs(feasible.targets$target.value) * tol
+cub <- feasible.targets$target.value + abs(feasible.targets$target.value) * tol
 
 # what do the bounds look like vs. targets and data?
-synfile.vs.targets %>%
-  mutate(clb=clb / 1e6, cub=cub / 1e6) %>%
+feasible.targets %>%
+  select(constraint.name, constraint.shortname, target.value, syn.value) %>%
+  mutate(clb=clb, cub=cub) %>%
+  mutate_at(vars(clb, target.value, cub), funs(. / 1e6)) %>%
   kable(caption="Ts",
         digits=c(0, 0, 1, 1, 3, 1, 1, 1), 
         format.args=list(big.mark = ','))
@@ -497,12 +462,6 @@ f.agim("taxbc", "single")
 f.agim("taxbc", "married")
 f.agim("taxbc", "other")
 
-glimpse(target.rules.feasible)
-target.rules.feasible$subgroup
-
-target.rules.feasible %>% filter(subgroup=="((c00100 > 500e3 & c00100 <= 1e6) & (MARS==1))")
-synfile.vs.targets[103, ]
-check[103, ]
 
 #******************************************************************************************************************
 #  8. Save all 3 files as a list, and also as csv to synpuf ####

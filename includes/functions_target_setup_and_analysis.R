@@ -54,7 +54,8 @@ prep_for_reweighting <- function(sfname) {
 add_rulenames <- function(target.rules){
   target.rules <- target.rules %>%
     mutate(constraint.name=paste0(wtvar, "_", str_remove_all(subgroup, " ")),
-           constraint.shortname=paste0("con_", row_number()))
+           constraint.shortname=paste0("con_", row_number()),
+           target.num=row_number())
   return(target.rules)
 }
 
@@ -62,6 +63,81 @@ add_rulenames <- function(target.rules){
 #****************************************************************************************************
 #                constraint coefficient functions ####
 #****************************************************************************************************
+get_constraint_coefficients_sparse <- function(synfile, target.rules){
+  # get the nonzero constraint coefficients for all feasible targets, in sparse form, as a data frame
+  # also create an enhanced targets data frame that includes a feasibility true-false indicator, a counter
+  # for the feasible constraint number, and sum of the RHS for the constraint
+  
+  # target.num is the target number - there may be fewer feasible constraints than desired targets
+  # i is the constraint number (there may be fewer feasible constraints than targets)
+  # j is the variable number
+  
+  get_nzcc <- function(target.num, synfile, target.rules, rules, enhanced.targets, wtvar="wt"){
+    # get constraint coefficients for a single target (a row in target.rules), as a data frame
+    
+    # determine whether the coefficient will be:
+    #   the weight for each record, if we are targeting number of returns, or
+    #   the weighted multiplied by a variable's value, for each record, if we are targeting weighted value of a variable
+    # the vector multiplier has the weight, or the weighted value of the variable
+    if(target.rules$wtvar[target.num]==wtvar) multiplier <- rep(1, nrow(synfile)) else # weighted number of records 
+      multiplier <- synfile[[target.rules$wtvar[target.num]]] # weighted value
+    
+    # get all constraint coefficients for this target
+    cc <- with(synfile, eval(rules[target.num]) * wt) * multiplier 
+    
+    inzcc <- which(cc!=0)  # get indexes of the nonzero constraint coefficients
+    
+    nzcc.row <- NULL
+    if(length(inzcc) > 0){
+      # only increase i, the counter of feasible constraints, if this constraint at least one nonzero constraint coefficient
+      i <<- i + 1 # MUST use the << syntax to change the value of the global variable i
+      nzcc.row <- tibble(i=i, j=inzcc, nzcc=cc[inzcc], constraint.shortname=target.rules$constraint.shortname[target.num])
+      enhanced.targets$cnum[target.num] <<- i
+      enhanced.targets$synfile.rhs[target.num] <<- sum(nzcc.row$nzcc)
+    } else enhanced.targets$feasible[target.num] <<- FALSE  # note the << syntax to change global variable
+    
+    return(nzcc.row)
+  }
+  
+  # Prepare to run get_nzcc on all targets
+  i <- 0 # counter for the number of feasible targets
+  enhanced.targets <- target.rules
+  enhanced.targets$feasible <- TRUE # we will change this to false for any non-feasible targets
+  enhanced.targets$cnum <- NA
+  enhanced.targets$synfile.rhs <- 0
+  rules <- parse(text=target.rules$subgroup) 
+  nzcc <- ldply(1:nrow(target.rules), get_nzcc, synfile, target.rules, rules, enhanced.targets)
+  
+  return(list(nzcc=nzcc, enhanced.targets=enhanced.targets))
+}
+
+
+get_constraint_sums <- function(df, target.rules){
+  get_consum <- function(target.num, df, target.rules, rules, wtvar="wt"){
+    # get constraint coefficients for a single target (a row in target.rules), as a data frame
+    
+    # determine whether the coefficient will be:
+    #   the weight for each record, if we are targeting number of returns, or
+    #   the weighted multiplied by a variable's value, for each record, if we are targeting weighted value of a variable
+    # the vector multiplier has the weight, or the weighted value of the variable
+    if(target.rules$wtvar[target.num]==wtvar) multiplier <- rep(1, nrow(df)) else # weighted number of records 
+      multiplier <- df[[target.rules$wtvar[target.num]]] # weighted value
+    
+    # get all constraint coefficients for this target
+    cc <- with(df, eval(rules[target.num]) * wt) * multiplier 
+    return(sum(cc))
+  }
+  
+  rules <- parse(text=target.rules$subgroup) # R logical expression for rules used in eval below
+  vsums <- laply(1:nrow(target.rules), get_consum, df, target.rules, rules)
+  return(vsums)
+}
+
+
+make.sparse.structure.from.nzcc <- function(constraint.coefficients.sparse){
+  dlply(constraint.coefficients.sparse, .(i), function(x) x$j)
+}
+
 
 get_constraint_coefficients_dense <- function(synfile, target.rules, wtvar="wt") {
   # get constraint coefficients -- how the value of a target changes when the weight changes

@@ -24,15 +24,15 @@ eval_g <- function(x, inputs) {
   
   # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
   
-  # inputs$ccmat.df has the fixed constraint coefficients, in sparse matrix form, in a dataframe that has:
+  # inputs$constraint.coefficients.sparse has the fixed constraint coefficients in sparse form in a dataframe that has:
   #   i -- the constraint number
   #   cname -- constraint name
   #   j -- index into x (i.e., the variable number
-  #   value
+  #   nzcc
   
   constraints <- inputs$constraint.coefficients.sparse %>%
     group_by(i, constraint.shortname) %>%
-    summarise(constraint.value=sum(value * x[j]) )
+    summarise(constraint.value=sum(nzcc * x[j]) )
   
   return(constraints$constraint.value)
 }
@@ -51,7 +51,7 @@ eval_jac_g <- function(x, inputs){
   
   # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
   
-  return(inputs$constraint.coefficients.sparse$value)
+  return(inputs$constraint.coefficients.sparse$nzcc)
 }
 
 
