@@ -151,7 +151,7 @@ agi.mars.cross <- expand.grid(a=agi.ranges, b=mars.groups, stringsAsFactors = FA
   .[["amcross"]]
 agi.mars.cross   
 
-
+# define variables to target
 names(synfile) %>% sort
 vars.to.target <- c("wt", "c00100", "e00200", "e00300", "e00650", "e00700", "e00900",
                     "e01100", "e01200", "e01400", "e01700", "e02400",
@@ -229,9 +229,9 @@ tolerances <- read_csv(
 5, .01
 10, .03
 20, .05
-50, .4
+50, .3
 75, .6
-100, 1
+100, .85
 200, Inf
 Inf, Inf")
 tolerances <- tolerances %>% mutate(apdiff.ub=lead(apdiff.lb)) %>% select(starts_with("ap"), tol.default)
