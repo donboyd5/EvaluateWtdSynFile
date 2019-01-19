@@ -99,75 +99,70 @@ df <- puf.full
 var <- "c00100"
 weight="wt"
 
-n.sum <- function(df, var, weight="wt", condition=TRUE){
+n.sum <- function(df, var, weight, condition=TRUE){
   # get the weighted number of records for which a logical condition related to the variable is met
+  # var is a numeric column in df
+  # weight is a vector of weights (could be a column in df, or could be external)
   # condition: boolean expression as text
-  # returns a scalar
+  # returns a scalar which is the weighted number of records
   condition <- parse(text=condition)
-  df %>% 
-    select(variable=!!var, weight=!!weight) %>%
+  df %>%
+    select(variable=!!var) %>%
     summarise(value=sum(weight * eval(condition))) %>%
     .[[1]]
 }
 
+n.sum(puf.full, vlist[6], puf.full$wt, "variable>0")
+n.sum(synfile, vlist[6], synfile$wt, "variable>0")
 
-n.sum(puf.full, vlist[6])
-n.sum(puf.full, vlist[6], condition="variable>0")
-n.sum(puf.full, vlist[6], condition="variable<0")
-n.sum(puf.full, vlist[6], condition="variable==0")
+n.sum(puf.full, vlist[6], puf.full$wt)
+n.sum(puf.full, vlist[6], puf.full$wt, condition="variable>0")
+n.sum(puf.full, vlist[6], puf.full$wt, condition="variable<0")
+n.sum(puf.full, vlist[6], puf.full$wt, condition="variable==0")
 
-val.sum <- function(df, var, weight="wt", condition=TRUE){
+val.sum <- function(df, var, weight, condition=TRUE){
   # get the weighted value of a variable for which a logical condition related to the variable is met
+  # var is a numeric column in df
+  # weight is a vector of weights (could be a column in df, or could be external)
   # condition: boolean expression as text
+  # returns a scalar which is the weighted value of the variable
   condition <- parse(text=condition)
   df %>% 
-    select(variable=!!var, weight=!!weight) %>%
+    select(variable=!!var) %>%
     summarise(value=sum(variable * weight * eval(condition))) %>%
     .[[1]]
 }
 
-val.sum(puf.full, vlist[6])
-val.sum(puf.full, vlist[6], condition="variable>0")
-val.sum(puf.full, vlist[6], condition="variable<0")
-val.sum(puf.full, vlist[6], condition="variable==0")
+val.sum(puf.full, vlist[6], puf.full$wt, "variable>0")
+val.sum(synfile, vlist[6], synfile$wt, "variable>0")
 
-n.sum(puf.full, vlist[6])
-n.sum(puf.full, vlist[5])
+val.sum(puf.full, vlist[6], puf.full$wt)
+val.sum(puf.full, vlist[6], puf.full$wt, condition="variable>0")
+val.sum(puf.full, vlist[6], puf.full$wt, condition="variable<0")
+val.sum(puf.full, vlist[6], puf.full$wt, condition="variable==0")
 
-n.pos <- function(df, var, weight="wt"){
-  n.sum(df, var, weight="wt", condition="variable>0")
+
+n.pos <- function(df, var, weight){
+  n.sum(df, var, weight, condition="variable>0")
 }
 
-n.neg <- function(df, var, weight="wt"){
-  n.sum(df, var, weight="wt", condition="variable<0")
+n.neg <- function(df, var, weight){
+  n.sum(df, var, weight, condition="variable<0")
 }
 
-n.pos(puf.full, vlist[6])
-n.neg(puf.full, vlist[6])
+n.pos(puf.full, vlist[6], puf.full$wt)
+n.neg(puf.full, vlist[6], puf.full$wt)
 
-val.pos <- function(df, var, weight="wt"){
-  val.sum(df, var, weight="wt", condition="variable>0")
+val.pos <- function(df, var, weight){
+  val.sum(df, var, weight, condition="variable>0")
 }
 
-val.neg <- function(df, var, weight="wt"){
-  val.sum(df, var, weight="wt", condition="variable<0")
+val.neg <- function(df, var, weight){
+  val.sum(df, var, weight, condition="variable<0")
 }
 
-val.pos(puf.full, vlist[6])
-val.neg(puf.full, vlist[6])
-
-
-# f <- function(df, var){
-#   # this was hard to get to work
-#   var <- var # this is critical in case var needs to be evaluated first -- e.g., it is an element in a vector
-#   var <- substitute(var)
-#   df %>%
-#     filter(UQ(as.name(var)) < 0) %>%
-#     select(var)
-# }
-# 
-# f(puf.full, "p23250")
-# f(puf.full, vlist[6])
+val.pos(puf.full, vlist[6], puf.full$wt)
+val.neg(puf.full, vlist[6], puf.full$wt)
 
 
 #******************************************************************************************************************
@@ -192,6 +187,14 @@ val.neg(puf.full, vlist[6])
 # we may want to see how far off we are on each constraint to help us determine priorities
 # or even automate the priority setting process
 
+# wt, c00100.val, taxbc.val, e00200.val
+recipe <- read_csv("var, fn
+                   wt, n.sum
+                   c00100, val.sum
+                   taxbc, val.sum
+                   e00200, val.sum")
+
+
 names(puf.full) %>% sort
 varlist <- c("c00100", "taxbc", "e00200", "e01700", "e00300", "p23250")
 fnlist <- c("n.pos", "n.neg", "val.sum", "val.pos", "val.neg")
@@ -202,28 +205,43 @@ recipe <- expand.grid(var=varlist, fn=fnlist) %>%
   arrange(var, fn)
 recipe <- bind_rows(tibble(var="wt", fn="n.sum"), recipe)
 recipe
+# for(i in 1:nrow(recipe)) recipe$target[i] <- do.call(recipe$fn[i], list(puf.full, recipe$var[i], puf.full$wt))
 
-for(i in 1:nrow(recipe)) recipe$target[i] <- do.call(recipe$fn[i], list(puf.full, recipe$var[i]))
-recipe
 
-# now add the priority weight
 recipe <- recipe %>%
-  mutate(pweight=case_when(fn %in% c("n.sum", "val.sum") ~ 10,
-                           var %in% c("wt", "c00100", "e00200") ~ 10,
-                           TRUE ~ 1)) %>%
+  rowwise() %>%
+  mutate(target=do.call(fn, list(puf.full, var, puf.full$wt))) %>%
+  ungroup %>%
+  mutate(priority.weight=case_when(fn %in% c("n.sum", "val.sum") ~ 1,
+                                   var %in% c("wt", "c00100", "e00200") ~ 1,
+                                   TRUE ~ 1)) %>%
   mutate(element=paste0(var, "_", fn)) %>%
-  select(element, var, fn, target, pweight)
+  select(element, var, fn, priority.weight, target)
 recipe
 
 w <- synfile$wt
+w <- rep(2*max(puf.full$wt), nrow(synfile))
+w <- w.opt
 inputs <- list()
 inputs$recipe <- recipe
+inputs$synsub <- synfile[, unique(recipe$var)] %>% mutate(wt=1)
 
-n.pos(synfile, "c00100")
+glimpse(inputs$synsub)
 
-sum(w * synfile)
+n.pos(synfile, "c00100", w)
 
-eval_f_full <- function(w, inputs) {
+
+t2 <- recipe %>%
+  rowwise() %>%
+  mutate(calc=do.call(fn, list(synfile, var, w))) %>%
+  ungroup %>%
+  mutate(obj=priority.weight * (calc - target)^2)
+t2
+sum(t2$obj)
+eval_f_full_2(w, inputs)
+eval_f_full(w, inputs2)
+
+eval_f_full_2 <- function(w, inputs) {
   # objective function - evaluates to a single number
   
   # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
@@ -232,15 +250,13 @@ eval_f_full <- function(w, inputs) {
   #                   objective function
   #                   first deriv
   #                   second deriv
-  # diffsq <- function(w, target.num, inputs) {
-  #   return(NULL)
-  # }
+  temp <- inputs$recipe %>%
+    rowwise() %>%
+    mutate(calc=do.call(fn, list(inputs$synsub, var, w))) %>%
+    ungroup %>%
+    mutate(obj=priority.weight * (calc - target)^2)
   
-  obj <- 
-    (sum(w * inputs$a) - inputs$a.target)^2 + 
-    (sum(w * inputs$b) - inputs$b.target)^2 + 
-    (sum(w * inputs$c) - inputs$c.target)^2 +
-    (sum(w * inputs$d) - inputs$d.target)^2
+  obj <- sum(temp$obj)
   
   return(obj)
 }
@@ -313,19 +329,18 @@ eval_grad_f_full <- function(w, inputs){
 }
 
 
-
 #******************************************************************************************************************
 #  6. Run ipoptr to get optimal x values ####
 #******************************************************************************************************************
-inputs <- list()
-inputs$a <- rep(1, nrow(synfile))
-inputs$a.target <- targs$one
-inputs$b <- synfile$c00100
-inputs$b.target <- targs$c00100
-inputs$c <- synfile$taxbc
-inputs$c.target <- targs$taxbc
-inputs$d <- synfile$e00200
-inputs$d.target <- targs$e00200
+inputs2 <- list()
+inputs2$a <- rep(1, nrow(synfile))
+inputs2$a.target <- targs$one
+inputs2$b <- synfile$c00100
+inputs2$b.target <- targs$c00100
+inputs2$c <- synfile$taxbc
+inputs2$c.target <- targs$taxbc
+inputs2$d <- synfile$e00200
+inputs2$d.target <- targs$e00200
 
 
 xlb <- rep(0, nrow(synfile))
@@ -354,7 +369,7 @@ b - a
 
 names(result)
 
-w <- result$solution
+w.opt <- result$solution
 targs
 sum(w * inputs$a)
 sum(w * inputs$b)
