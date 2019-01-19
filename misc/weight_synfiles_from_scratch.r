@@ -89,6 +89,170 @@ targs <- puf.full %>%
 targs
 
 
+
+#******************************************************************************************************************
+#  helper functions ####
+#******************************************************************************************************************
+names(puf.full) %>% sort
+vlist <- c("c00100", "taxbc", "e00200", "e01700", "e00300", "p23250")
+df <- puf.full
+var <- "c00100"
+weight="wt"
+
+n.sum <- function(df, var, weight="wt", condition=TRUE){
+  # get the weighted number of records for which a logical condition related to the variable is met
+  # condition: boolean expression as text
+  # returns a scalar
+  condition <- parse(text=condition)
+  df %>% 
+    select(variable=!!var, weight=!!weight) %>%
+    summarise(value=sum(weight * eval(condition))) %>%
+    .[[1]]
+}
+
+
+n.sum(puf.full, vlist[6])
+n.sum(puf.full, vlist[6], condition="variable>0")
+n.sum(puf.full, vlist[6], condition="variable<0")
+n.sum(puf.full, vlist[6], condition="variable==0")
+
+val.sum <- function(df, var, weight="wt", condition=TRUE){
+  # get the weighted value of a variable for which a logical condition related to the variable is met
+  # condition: boolean expression as text
+  condition <- parse(text=condition)
+  df %>% 
+    select(variable=!!var, weight=!!weight) %>%
+    summarise(value=sum(variable * weight * eval(condition))) %>%
+    .[[1]]
+}
+
+val.sum(puf.full, vlist[6])
+val.sum(puf.full, vlist[6], condition="variable>0")
+val.sum(puf.full, vlist[6], condition="variable<0")
+val.sum(puf.full, vlist[6], condition="variable==0")
+
+n.sum(puf.full, vlist[6])
+n.sum(puf.full, vlist[5])
+
+n.pos <- function(df, var, weight="wt"){
+  n.sum(df, var, weight="wt", condition="variable>0")
+}
+
+n.neg <- function(df, var, weight="wt"){
+  n.sum(df, var, weight="wt", condition="variable<0")
+}
+
+n.pos(puf.full, vlist[6])
+n.neg(puf.full, vlist[6])
+
+val.pos <- function(df, var, weight="wt"){
+  val.sum(df, var, weight="wt", condition="variable>0")
+}
+
+val.neg <- function(df, var, weight="wt"){
+  val.sum(df, var, weight="wt", condition="variable<0")
+}
+
+val.pos(puf.full, vlist[6])
+val.neg(puf.full, vlist[6])
+
+
+# f <- function(df, var){
+#   # this was hard to get to work
+#   var <- var # this is critical in case var needs to be evaluated first -- e.g., it is an element in a vector
+#   var <- substitute(var)
+#   df %>%
+#     filter(UQ(as.name(var)) < 0) %>%
+#     select(var)
+# }
+# 
+# f(puf.full, "p23250")
+# f(puf.full, vlist[6])
+
+
+#******************************************************************************************************************
+#  set up the "constraint" components of the objective function ####
+#******************************************************************************************************************
+# I refer to "constraint" components of the objective function as the components for which we want to minimize the squared difference of sum vs target
+# for each component, we need:
+#   the variable involved
+#   the "constraint" type, i.e., one of:  n.all, sum.all, n.pos, n.neg, sum.pos, sum.neg
+#   the "constraint" priority -- a multiplier of the squared diff -- the larger the mult, the more important this becomes
+#   the target
+#   the coefficient for each record determining how it enters into the sum that will be compared to the target
+#     for value sums:
+#       for the weight variable it will be 1 x the weight
+#       for other variables it will be the variable times the weight
+#     for numbers of returns it is simply the weight variable
+
+# maybe make a list of objective function elements, or a data frame -- with an associated list of the coefficients
+# the df would have:
+#   elname, elvar, eltype, priority; link to a vector of coefficients based on elname, link to target based on elname
+
+# we may want to see how far off we are on each constraint to help us determine priorities
+# or even automate the priority setting process
+
+names(puf.full) %>% sort
+varlist <- c("c00100", "taxbc", "e00200", "e01700", "e00300", "p23250")
+fnlist <- c("n.pos", "n.neg", "val.sum", "val.pos", "val.neg")
+
+recipe <- expand.grid(var=varlist, fn=fnlist) %>% 
+  mutate_all(as.character) %>% 
+  as_tibble() %>%
+  arrange(var, fn)
+recipe <- bind_rows(tibble(var="wt", fn="n.sum"), recipe)
+recipe
+
+for(i in 1:nrow(recipe)) recipe$target[i] <- do.call(recipe$fn[i], list(puf.full, recipe$var[i]))
+recipe
+
+# now add the priority weight
+recipe <- recipe %>%
+  mutate(pweight=case_when(fn %in% c("n.sum", "val.sum") ~ 10,
+                           var %in% c("wt", "c00100", "e00200") ~ 10,
+                           TRUE ~ 1)) %>%
+  mutate(element=paste0(var, "_", fn)) %>%
+  select(element, var, fn, target, pweight)
+recipe
+
+w <- synfile$wt
+inputs <- list()
+inputs$recipe <- recipe
+
+n.pos(synfile, "c00100")
+
+sum(w * synfile)
+
+eval_f_full <- function(w, inputs) {
+  # objective function - evaluates to a single number
+  
+  # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
+  # here are the objective function, the 1st deriv, and the 2nd deriv
+  # http://www.derivative-calculator.net/
+  #                   objective function
+  #                   first deriv
+  #                   second deriv
+  # diffsq <- function(w, target.num, inputs) {
+  #   return(NULL)
+  # }
+  
+  obj <- 
+    (sum(w * inputs$a) - inputs$a.target)^2 + 
+    (sum(w * inputs$b) - inputs$b.target)^2 + 
+    (sum(w * inputs$c) - inputs$c.target)^2 +
+    (sum(w * inputs$d) - inputs$d.target)^2
+  
+  return(obj)
+}
+
+
+
+# callit <- function(FUN, df, var){FUN(df, var)}
+# callit(val.sum, puf.full, "p23250")
+
+
+
+
 #******************************************************************************************************************
 #  define functions ####
 #******************************************************************************************************************
@@ -197,8 +361,17 @@ sum(w * inputs$b)
 sum(w * inputs$c)
 sum(w * inputs$d)
 
-quantile(w)
+quantile(w, probs=0:10/10)
+quantile(synfile$wt, probs=0:10/10)
+quantile(puf.full$wt, probs=0:10/10)
 
+tibble(w=result$solution) %>%
+  ggplot(aes(w)) +
+  geom_histogram(binwidth=25, fill="blue") +
+  geom_vline(xintercept = median(w)) +
+  # scale_x_continuous(breaks=seq(0, max(w), .05)) +
+  theme(axis.text.x=element_text(size=8, angle=30)) +
+  ggtitle("Distribution of weights")
 
 
 
