@@ -26,6 +26,7 @@ library("knitr")
 
 library("zoo") # for rollapply
 
+# devtools::install_github("donboyd5/btools")
 library("btools") # library that I created (install from github)
 
 library("ipoptr")
@@ -50,9 +51,13 @@ source("./includes/functions_target_setup_and_analysis.r")
 source("./includes/functions_ipopt.r")
 
 
+# functions specific to the weighting from scratch approach:
+source("./includes/functions_ipopt.r")
+source("./includes/functions_weight_from_scratch.r")
+
 
 #****************************************************************************************************
-#                Initialization ####
+#                Get puf variable names ####
 #****************************************************************************************************
 puf.vnames <- get_puf_vnames()
 addnames <- read_csv("vnum, vname, vdesc, category
@@ -63,6 +68,7 @@ addnames <- read_csv("vnum, vname, vdesc, category
 puf.vnames <- bind_rows(addnames, puf.vnames) %>%
   arrange(vnum, vname)
 ht(puf.vnames)
+
 
 #******************************************************************************************************************
 #  Get previously-prepared synfile-PUF and tax output, merge, and separate PUF and synfile ####
@@ -84,59 +90,6 @@ mrgdf2 <- mrgdf %>%
 
 puf.full <- mrgdf2 %>% filter(ftype=="puf.full")
 synfile <- mrgdf2 %>% filter(ftype==sfname)
-
-
-#******************************************************************************************************************
-#  helper functions ####
-#******************************************************************************************************************
-
-n.sum <- function(df, var, weight, condition=TRUE){
-  # get the weighted number of records for which a logical condition related to the variable is met
-  # var is a numeric column in df
-  # weight is a vector of weights (could be a column in df, or could be external)
-  # condition: boolean expression as text
-  # returns a scalar which is the weighted number of records
-  condition <- parse(text=condition)
-  df %>%
-    select(variable=!!var) %>%
-    summarise(value=sum(weight * eval(condition))) %>%
-    .[[1]]
-}
-
-
-val.sum <- function(df, var, weight, condition=TRUE){
-  # get the weighted value of a variable for which a logical condition related to the variable is met
-  # var is a numeric column in df
-  # weight is a vector of weights (could be a column in df, or could be external)
-  # condition: boolean expression as text
-  # returns a scalar which is the weighted value of the variable
-  condition <- parse(text=condition)
-  df %>% 
-    select(variable=!!var) %>%
-    summarise(value=sum(variable * weight * eval(condition))) %>%
-    .[[1]]
-}
-
-
-n.pos <- function(df, var, weight){
-  n.sum(df, var, weight, condition="variable>0")
-}
-
-n.neg <- function(df, var, weight){
-  n.sum(df, var, weight, condition="variable<0")
-}
-
-
-val.pos <- function(df, var, weight){
-  val.sum(df, var, weight, condition="variable>0")
-}
-
-val.neg <- function(df, var, weight){
-  val.sum(df, var, weight, condition="variable<0")
-}
-
-# val.pos(puf.full, vlist[6], puf.full$wt)
-# val.neg(puf.full, vlist[6], puf.full$wt)
 
 
 #******************************************************************************************************************
@@ -264,18 +217,17 @@ coeffs <- expand.grid(wtnum=1:nrow(inputs$synsub), obj.element=inputs$recipe$obj
 inputs$coeffs <- coeffs
 
 
-# callit <- function(FUN, df, var){FUN(df, var)}
-# callit(val.sum, puf.full, "p23250")
-
-
 #******************************************************************************************************************
 #  run ipoptr ####
 #******************************************************************************************************************
 
 # inputs$recipe
 
+# bounds on the weights
 xlb <- rep(1, nrow(synfile))
 xub <- rep(1.5*max(puf.full$wt), nrow(synfile))
+
+# starting point:
 x0 <- (xlb + xub) / 2
 x0 <- x0 * sum(puf.full$wt / sum(x0))
 
@@ -384,114 +336,9 @@ tibble(w=wt) %>%
 
 
 
-
-
 #******************************************************************************************************************
-#  define functions -- AUTOMATED ####
+# DEFUNCT -- look at other nonlinear solvers ####
 #******************************************************************************************************************
-eval_f_full_scaled <- function(w, inputs) {
-  # objective function - evaluates to a single number
-  
-  # w is the vector of weights computed by ipopt in this iteration
-  
-  # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
-  
-  # inputs$recipe is a data frame where each row defines an element of the objective function, with columns:
-  #   obj.element -- a short name for the element, giving the variable involved and the function to be applied to it
-  #   var -- the variable involved -- e.g., c00100 or e00200
-  #   fn -- the function to be applied -- one of n.sum, val.sum, n.pos, val.pos, n.neg, val.neg
-  #   multiplier -- a weighting factor that can make this element more important than other elements
-  #     default is 1; larger numbers make an element more important
-  #   target -- the value for this calculation as applied to the target puf file
-  
-  # inputs$synsub is a dataframe that is a subset of the synfile that only includes the columns needed to
-  #   calculate the objective function. 
-  #     The wt column is special in that its value is set to 1, to make
-  #     calculations involving a weight variable easy. (Multiplying this iteration's weight vector, w, by
-  #     the synsub$wt weight variable (i.e., 1), gives the tentative weight for the file. The sum of this is
-  #     of course the sum of weights. THis allows us to treat the weight like it is any other variable.)
-  
-  # obj -- calculated below is the objective function value; it is the sum across all elements of the:
-  #   priority-weighted 
-  #     squared differences of the 
-  #       sum of values calculated for an element using the weight vector from this iteration, minus the
-  #         corresponding target value in the puf calculated  using its weights
-  # ratio <- function(target.calc, target) ifelse(target==0, 1, target.calc / target)
-  
-  temp <- inputs$recipe %>%
-    rowwise() %>%
-    # the mutate step applies this element's function to this element's variable, using this iteration's weights:
-    mutate(target.calc=do.call(fn, list(inputs$synsub, var, w))) %>% 
-    ungroup %>%
-    mutate(obj=priority.weight * {(target.calc / scale - target / scale)^2})
-  
-  obj <- sum(temp$obj)
-  
-  return(obj)
-}
-# w <- x0
-
-
-* grad_f[         11] = 8.9000438541168797e+008    ~ 8.8990305062740314e+008  [1.139e-004]
-
-w1 <- x0; w2 <- w1
-n <- 11
-w2[n] <- w1[n] + 1
-a <- eval_f_full_scaled(w2, inputs) - eval_f_full_scaled(w1, inputs)
-b <- eval_grad_f_full_scaled(w, inputs)[n]
-cbind(a, b, b - a)
-
-# * grad_f[         11] = 8.9000438541168797e+008    ~ 8.8990305062740314e+008  [1.139e-004]
-# * grad_f[         11] = 8.9000438541168797e+008    ~ 8.8990305062740314e+008  [1.139e-004]
-
-
-
-eval_grad_f_full_scaled <- function(w, inputs){
-  # gradient of objective function - a vector length w
-  # giving the partial derivatives of obj wrt each w[i]
-  
-  # ipoptr requires that ALL functions receive the same arguments, so the inputs list is passed to ALL functions
-  
-  # inputs will include:
-  #   for each target element in the objective function:
-  #     the sum -- s1 for first target element, and so on, and
-  #     the multiplier vector (e.g., wages, cap gains, etc.)
-  
-  # http://www.derivative-calculator.net/
-  # https://www.symbolab.com/solver/partial-derivative-calculator
-  # Example where we only have one target element in the objective function, and only have
-  #   3 records and therefore 3 weights, and need to return a vector of 3 partial derivatives
-  # Notation: w1, w2, and w3 are the first 3 weights in the vector of weights
-  #           a1, a2, and a3 are the 3 constants they are multiplied by (e.g., wages1, wages2, wages3)
-  #           t is the sum or target we are comparing to
-  #           p is the priority weight of this element of the objective function
-  #           calc is the calculated value of the target with the new weights  
-  # The objective function to minimize is p*(w1*a1 + w2*a2 + w3*a3 - s)^2
-  # The first partial derivatives of the objective function are:
-  #   wrt w1:          2*a1*p*(w1*a1 + w2*a2 + w3*a3 - t) = 2*a1*p*(calc - t)
-  #   wrt w2:          2*a2*p*(w1*a1 + w2*a2 + w3*a3 - t) = 2*a2*p*(calc - t)
-  #   wrt w3:          2*a3*p*(w1*a1 + w2*a2 + w3*a3 - t) = 2*a3*p*(calc - t)
-  # If we have multiple target elements, each vector element will have a more complex sum
-  
-  wdf <- tibble(wt.iter=w, wtnum=1:length(w))
-  
-  grad <- inputs$coeffs %>% 
-    left_join(wdf, by="wtnum") %>%
-    group_by(obj.element) %>%
-    # mutate(gsum=sum(wt.iter*coeff), diff=gsum - first(target)) %>%
-    # mutate(g2=(gsum + 1*coeff - target)^2 - (gsum - target)^2) %>%
-    # mutate(cdiff=coeff*(sum(wt.iter*coeff) - first(target))) %>%
-    # mutate(cscaled=cdiff /(first(scale)^2)) %>%
-    # mutate(g3=2 * priority.weight * cscaled) %>%
-    mutate(calc=sum(wt.iter*coeff)) %>%
-    mutate(grad={2 * coeff * priority.weight * (calc - target)} / {scale^2}) %>%
-    group_by(wtnum) %>%
-    summarise(grad=sum(grad)) %>% # sum across all of the object elements for this particular weight
-    ungroup
-  
-  return(grad$grad)
-}
-
 
 #******************************************************************************************************************
 # trustOptim ####
@@ -499,7 +346,6 @@ eval_grad_f_full_scaled <- function(w, inputs){
 # NO GOOD - cannot set bounds, gives negative weights
 install.packages("trustOptim")
 library("trustOptim")
-
 
 val <- trust.optim(x0, fn=eval_f_full_scaled, gr=eval_grad_f_full_scaled, hs=NULL,
                    method = "SR1", control = list(report.precision=1L, function.scale.factor=-1),
