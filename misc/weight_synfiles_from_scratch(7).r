@@ -126,9 +126,22 @@ recipe <- read_csv("var, fn
 names(puf.full %>% select_if(is.numeric)) %>% sort
 dropvars <- c("e00100", "DSI", "EIC", "f2441", "f6251", "fded", "MARS", "MIDR", "n24", "RECID", "s006", "wt",
               "e07400", "e11200", "e03300", "e00800", "e07600", "p08000", "e02100p", "e02100s", "e00900p", "e00900s")
-# e00800 is alimony received -- dropped it based on this
-# e07600 is Credit for prior year minimum tax, also dropped
-# p08000 is other credits, also dropped
+puf.vnames %>% filter(vname %in% dropvars)
+
+# vnum vname  vdesc                                             category   
+# <dbl> <chr>  <chr>                                             <chr>      
+#   1     7 e00800 Alimony received                                  income     
+# 2    28 e03300 Payments to KEOGH accounts                        stat_adjust
+# 3    31 e00100 Adjusted Gross Income (deficit)  (AGI)  (+/-)     agi        
+# 4    50 e07400 General business credit                           credits    
+# 5    51 e07600 Credit for prior year minimum tax                 credits    
+# 6    52 p08000 Other Credits                                     credits    
+# 7    72 e11200 Excess FICA/RRTA                                  payments   
+# 8   169 s006   Decimal weight                                    misc_codes 
+# 9  1005 fded   Form of Deduction Code                            manual     
+# 10  1008 f2441  Form 2441, Child Care Credit Qualified Individual manual     
+# 11  1010 f6251  Form 6251, Alternative Minimum Tax                manual     
+# 12  1021 n24    Number of Children for Child Tax Credit           manual     
 
 varlist <- names(puf.full %>% select_if(is.numeric)) %>% 
   sort %>%
@@ -145,6 +158,7 @@ recipe <- bind_rows(tibble(var="wt", fn="n.sum"), recipe)
 recipe
 # for(i in 1:nrow(recipe)) recipe$target[i] <- do.call(recipe$fn[i], list(puf.full, recipe$var[i], puf.full$wt))
 
+# start here to adjust a previously created recipe ----
 tscale <- 1
 recipe <- recipe %>%
   rowwise() %>%
@@ -188,6 +202,14 @@ recipe.use
 
 recipe.use %>% arrange(-priority.weight)
 
+# What would our objective function be if each targeted variable was off by a given % (as a decimal)?
+pct <- .01
+sum(recipe.use$priority.weight * (pct^2))
+# what if they were off by that same pct on average but with a random variation?
+pctv <- rnorm(nrow(recipe.use), pct, sd=.05)
+sum(recipe.use$priority.weight * (pctv^2))
+(pctv *100) %>% round(., 1)
+
 
 #******************************************************************************************************************
 #  prepare the input list ####
@@ -220,7 +242,6 @@ inputs$coeffs <- coeffs
 #******************************************************************************************************************
 #  run ipoptr ####
 #******************************************************************************************************************
-
 # inputs$recipe
 
 # bounds on the weights
@@ -231,23 +252,20 @@ xub <- rep(1.5*max(puf.full$wt), nrow(synfile))
 x0 <- (xlb + xub) / 2
 x0 <- x0 * sum(puf.full$wt / sum(x0))
 
-# DIAGNOSTIC: Take a look at the values at the starting point
+# PRE-CHECK: Take a look at the values at the starting point
 start <- inputs$recipe %>%
   rowwise() %>%
   mutate(calc=do.call(fn, list(synfile, var, x0)),
          diff=calc - target,
          pdiff=diff / target * 100,
          apdiff=abs(pdiff),
-         diffsq=(diff / scale)^2,
-         objfn=diffsq * priority.weight) %>%
+         sdiffsq=(diff / scale)^2,
+         objfn=sdiffsq * priority.weight) %>%
   ungroup
 start %>% arrange(-apdiff)
-start %>% arrange(-diffsq)
+start %>% arrange(-sdiffsq)
 start %>% arrange(-objfn)
-# e00800 is alimony received -- dropped it based on this
-# e07600 is Credit for prior year minimum tax, also dropped
-# p08000 is other credits, also dropped
-# END DIAGNOSTIC
+# END PRE-CHECK
 
 opts <- list("print_level" = 5,
              "file_print_level" = 5, # integer
@@ -280,7 +298,7 @@ saveRDS(optim_example, "./results/optim_example.rds")
 #******************************************************************************************************************
 #  Examine results ####
 #******************************************************************************************************************
-names(result)
+# retrieve a previous run or else use the results from above
 optim_example <- readRDS("./results/optim_example.rds")
 result <- optim_example$result
 puf.full <- optim_example$puf.full
@@ -289,13 +307,11 @@ inputs <- optim_example$inputs
 recipe.flagged <- optim_example$recipe.flagged
 
 
+names(result)
+
 # ------------------
 w.sol <- result$solution
 # w.sol <- val$solution
-
-quantile(w.sol, probs=0:10/10)
-quantile(synfile$wt, probs=0:10/10)
-quantile(puf.full$wt, probs=0:10/10)
 
 comp <- inputs$recipe %>%
   rowwise() %>%
@@ -303,14 +319,15 @@ comp <- inputs$recipe %>%
          diff=calc - target,
          pdiff=diff / target * 100,
          apdiff=abs(pdiff),
-         diffsq=(diff / scale)^2,
-         objfn=diffsq * priority.weight)
+         sdiffsq=(diff / scale)^2, # scaled diff sq
+         objfn=sdiffsq * priority.weight) %>% # weighted sdiffsq -- the element in the objective function
+  select(obj.element, var, fn, scale, priority.weight, target, calc, diff, pdiff, apdiff, sdiffsq, objfn, vdesc)
 
 sum(comp$objfn)
 result$objective 
 
 comp %>%
-  arrange(-diffsq)
+  arrange(-sdiffsq)
 
 comp %>%
   arrange(-objfn)
@@ -323,17 +340,23 @@ comp %>%
 
 comp %>% filter(var %in% c('c00100', "e00200", "taxbc"))
 
-wt <- result$solution
-wt <- puf.full$wt
-wt <- synfile$wt
-tibble(w=wt) %>%
+quantile(w.sol, probs=0:10/10)
+quantile(synfile$wt, probs=0:10/10)
+quantile(puf.full$wt, probs=0:10/10)
+
+p <- bind_rows(tibble(w=puf.full$wt, type="1_puf"),
+          tibble(w=result$solution, type="2_weights_from_scratch"),
+          tibble(w=synfile$wt, type="3_reweighted_with_constraints")) %>%
   ggplot(aes(w)) +
   geom_histogram(binwidth=25, fill="blue") +
   geom_vline(aes(xintercept = median(w))) +
-  # scale_x_continuous(breaks=seq(0, max(w), .05)) +
+  scale_x_continuous(breaks=seq(0, 5000, 250)) +
   theme(axis.text.x=element_text(size=8, angle=30)) +
+  facet_wrap(~type, nrow=3) +
   ggtitle("Distribution of weights")
+p
 
+ggsave("./results/optim_example_hist.png", plot=p)
 
 
 #******************************************************************************************************************
