@@ -74,10 +74,11 @@ ht(puf.vnames)
 #  Get previously-prepared synfile-PUF and tax output, merge, and separate PUF and synfile ####
 #******************************************************************************************************************
 sfname <- "synthpop3"
-synprep <- readRDS(paste0(globals$tc.dir, sfname, "_rwprep.rds"))
+# synprep <- readRDS(paste0(globals$tc.dir, sfname, "_rwprep.rds"))
+synprep <- readRDS(paste0(globals$synd, sfname, "_rwprep.rds")) # this file is now in synpuf in Google Drive
 
 # merge and then split
-tcvars <- c("c00100", "taxbc")
+tcvars <- c("c00100", "taxbc") # taxcalc vars
 mrgdf <- left_join(synprep$tc.base, synprep$tc.output %>% dplyr::select(RECID, tcvars))
 glimpse(mrgdf)
 
