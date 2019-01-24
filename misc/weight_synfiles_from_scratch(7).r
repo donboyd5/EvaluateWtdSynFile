@@ -70,17 +70,22 @@ puf.vnames <- bind_rows(addnames, puf.vnames) %>%
 ht(puf.vnames)
 
 
+
 #******************************************************************************************************************
 #  Get previously-prepared synfile-PUF and tax output, merge, and separate PUF and synfile ####
 #******************************************************************************************************************
 sfname <- "synthpop3"
 # synprep <- readRDS(paste0(globals$tc.dir, sfname, "_rwprep.rds"))
 synprep <- readRDS(paste0(globals$synd, sfname, "_rwprep.rds")) # this file is now in synpuf in Google Drive
+names(synprep)
+
+# now get the reforms and merge in taxbc
 
 # merge and then split
 tcvars <- c("c00100", "taxbc") # taxcalc vars
 mrgdf <- left_join(synprep$tc.base, synprep$tc.output %>% dplyr::select(RECID, tcvars))
 glimpse(mrgdf)
+count(mrgdf, ftype)
 
 
 #******************************************************************************************************************
@@ -89,8 +94,8 @@ glimpse(mrgdf)
 mrgdf2 <- mrgdf %>%
   filter(MARS==2, c00100>=0, c00100<=25e3)
 
-puf.full <- mrgdf2 %>% filter(ftype=="puf.full")
-synfile <- mrgdf2 %>% filter(ftype==sfname)
+puf.full <- mrgdf2 %>% filter(ftype=="puf.full") # this has original puf weight
+synfile <- mrgdf2 %>% filter(ftype==sfname) # this, too, has original puf weight
 
 
 #******************************************************************************************************************
@@ -347,7 +352,7 @@ quantile(puf.full$wt, probs=0:10/10)
 
 p <- bind_rows(tibble(w=puf.full$wt, type="1_puf"),
           tibble(w=result$solution, type="2_weights_from_scratch"),
-          tibble(w=synfile$wt, type="3_reweighted_with_constraints")) %>%
+          tibble(w=synfile$wt, type="3_synthesized")) %>%
   ggplot(aes(w)) +
   geom_histogram(binwidth=25, fill="blue") +
   geom_vline(aes(xintercept = median(w))) +
@@ -358,6 +363,398 @@ p <- bind_rows(tibble(w=puf.full$wt, type="1_puf"),
 p
 
 ggsave("./results/optim_example_hist.png", plot=p)
+
+
+#******************************************************************************************************************
+# Solve the problem for the full file, in pieces ####
+#******************************************************************************************************************
+# get full versions of the two files
+puf <- mrgdf %>% filter(ftype=="puf.full")
+syn <- mrgdf %>% filter(ftype==sfname)
+# note that RECID is sequential from 1 on puf to the highest value on syn and is unique
+
+
+#.. examine the data to estimate where we should split it ----
+count(puf, MARS)
+ycuts <- cut(puf$c00100, 10)
+levels(ycuts)
+
+# determine uniform cut points
+puf %>% 
+  mutate(igroup=ntile(c00100, 15)) %>% 
+  group_by(igroup) %>%
+  summarise(ymin=min(c00100), ymax=max(c00100), n=n(), wt.sum=sum(wt), agib=sum(wt * c00100) / 1e9)
+ibreaks <- c(-Inf, 0, 5e3, 10e3, 15e3, 20e3, 25e3, 40e3, 50e3, 75e3, 100e3,
+             150e3, 200e3, 300e3, 400e3, 500e3,
+             750e3, 1e6, 1.5e6, 2e6, 5e6, 10e6, Inf)
+
+tmp <- puf %>% 
+  select(MARS, wt, c00100) %>%
+  mutate(mgroup=ifelse(MARS %in% 1:2, MARS, 3),
+         igroup=cut(c00100, ibreaks, include.lowest = TRUE)) %>%
+  group_by(mgroup, igroup)
+count(tmp, mgroup, igroup) %>% spread(mgroup, n)
+
+
+tmp <- puf %>% 
+  select(MARS, wt, c00100) %>%
+  mutate(mgroup=ifelse(MARS %in% 1:2, MARS, 3),
+         inum=case_when(mgroup==1 ~ 12,
+                        mgroup==2 ~ 20,
+                        mgroup==3 ~ 10,
+                        TRUE ~ 0)) %>%
+  group_by(mgroup) %>%
+  mutate(igroup=ntile(c00100, inum))
+
+gbreaks <- tmp %>%
+  group_by(mgroup, igroup) %>%
+  summarise(imin=min(c00100), imax=max(c00100), n=n(), wt.sum=sum(wt), agib=sum(wt * c00100) / 1e9)
+gbreaks
+
+# how does synfile look if we choose these exact breaks?
+i1 <- gbreaks %>% filter(mgroup==1) %>% .[["imin"]]
+i1 <- c(-Inf, i1[-1], Inf)
+i1
+
+i2 <- gbreaks %>% filter(mgroup==2) %>% .[["imin"]]
+i2 <- c(-Inf, i2[-1], Inf)
+i2
+
+i3 <- gbreaks %>% filter(mgroup==3) %>% .[["imin"]]
+i3 <- c(-Inf, i3[-1], Inf)
+i3
+
+# adjust the breaks so that there is always a zero
+adjb <- function(b) c(b[1], 0, b[2:length(b)])
+adjb(i3)
+
+i1a <- adjb(i1)
+i2a <- adjb(i2)
+i3a <- adjb(i3)
+
+f <- function(c00100, mgroup){
+  brks <- if(mgroup[1]==1) i1a else
+    if(mgroup[1]==2) i2a else
+      if(mgroup[1]==3) i3a
+  # igroup <- cut(c00100, brks, include.lowest = TRUE) %>% as.factor
+  igroup.element <- function(c00100) min(which(c00100 < brks)) - 1
+  igroup <- sapply(c00100, igroup.element)
+  return(igroup)
+}
+
+# look at two files together
+btmp <- bind_rows(puf %>% mutate(type="puf"),
+                  syn %>% mutate(type="syn")) %>%
+  select(type, MARS, wt, c00100) %>%
+  mutate(mgroup=ifelse(MARS %in% 1:2, MARS, 3)) %>%
+  group_by(type, mgroup) %>%
+  mutate(igroup=f(c00100, mgroup))
+btmp %>% ungroup %>% filter(mgroup==1) %>% count(igroup)
+
+btmp %>%
+  group_by(type, mgroup, igroup) %>%
+  summarise(n=n()) %>%
+  spread(type, n) %>%
+  mutate(diff=syn - puf) %>%
+  ungroup %>%
+  arrange(mgroup, igroup)
+
+#.. create split rules ----
+m1 <- tibble(imin=i1a[-length(i1a)], imax=i1a[-1], mgroup=1)
+m2 <- tibble(imin=i2a[-length(i2a)], imax=i2a[-1], mgroup=2)
+m3 <- tibble(imin=i3a[-length(i3a)], imax=i3a[-1], mgroup=3)
+split.rules <- bind_rows(m1, m2, m3) %>% mutate(group=row_number()) %>% select(group, mgroup, imin, imax)
+split.rules
+
+# prepare the files for splitting
+getgroup <- function(mgroup.in, c00100){
+  split <- split.rules %>% filter(mgroup==mgroup.in[1])
+  igroup.element <- function(c00100) min(which(c00100 < split$imax))
+  group <- split$group[sapply(c00100, igroup.element)]
+  # split$group[min(which(c00100 < split$imax))]
+  return(group)
+}
+getgroup(1, c(-100, -1, 0, 1))
+
+idfile <- mrgdf %>%
+  mutate(mgroup=ifelse(MARS %in% 1:2, MARS, 3)) %>%
+  group_by(ftype, mgroup) %>%
+  mutate(group=getgroup(mgroup, c00100)) %>%
+  ungroup %>%
+  select(ftype, RECID, mgroup, group) %>%
+  arrange(RECID)
+ht(idfile)
+count(idfile, mgroup, ftype, group) %>% spread(ftype, n) %>% mutate(diff=synthpop3 - puf.full, sum=puf.full + synthpop3)
+
+# now we are ready to run the file in pieces
+getrec <- function(puf.full, synfile){
+  dropvars <- c("e00100", "DSI", "EIC", "f2441", "f6251", "fded", "MARS", "MIDR", "n24", "RECID", "s006", "wt",
+                "e07400", "e11200", "e03300", "e00800", "e07600", "p08000", "e02100p", "e02100s", "e00900p", "e00900s")
+  varlist <- names(puf.full %>% select_if(is.numeric)) %>% 
+    sort %>%
+    setdiff(., dropvars)
+  fnlist <- c("n.pos", "n.neg", "val.sum", "val.pos", "val.neg")
+  
+  recipe <- expand.grid(var=varlist, fn=fnlist, stringsAsFactors = FALSE) %>% 
+    as_tibble() %>%
+    arrange(var, fn)
+  recipe <- bind_rows(tibble(var="wt", fn="n.sum"), recipe)
+  
+  tscale <- 1
+  recipe <- recipe %>%
+    rowwise() %>%
+    mutate(target=do.call(fn, list(puf.full, var, puf.full$wt))) %>%
+    ungroup %>%
+    mutate(scale=ifelse(target!=0, abs(target / tscale), 1/ tscale),
+           obj.element=paste0(var, "_", fn)) %>%
+    select(obj.element, var, fn, scale, target) %>%
+    arrange(var, fn)
+  
+  recipe.flagged <- recipe %>%
+    rowwise() %>%
+    mutate(syn.unwtd=do.call(fn, list(synfile, var, rep(1, nrow(synfile))))) %>% # so we can check if negs!
+    group_by(var) %>%
+    mutate(flag.dropneg=ifelse(str_detect(fn, "neg") & target==0 & syn.unwtd==0, 1, 0),
+           flag.dropdupsum=ifelse(target==target[match("val.sum", fn)] & (fn=="val.pos"), 1, 0),
+           flag.dropdupn=ifelse(target==target[match("n.sum", fn)] & (fn=="n.pos"), 1, 0)) %>%
+    mutate_at(vars(starts_with("flag")), funs(naz)) %>%
+    ungroup %>%
+    arrange(var, fn)
+  
+  # remove recipe elements where the target is zero
+  recipe.use <- recipe.flagged %>%
+    filter(!(flag.dropneg | flag.dropdupsum | flag.dropdupn)) %>%
+    filter(target!=0) %>%
+    select(obj.element, var, fn, scale, target)
+  
+  # finally, add priority weights
+  recipe.use <- recipe.use %>%
+    mutate(priority.weight=case_when(var %in% c("wt", "c00100", "e00200", "taxbc") ~ 100,
+                                     fn %in% c("n.sum", "val.sum") ~ 10,
+                                     TRUE ~ 1))  %>% 
+    left_join(puf.vnames %>% select(var=vname, vdesc))
+  return(list(recipe.use=recipe.use, recipe.flagged=recipe.flagged))
+}
+
+getinplist <- function(synfile, recipe.use){
+  inputs <- list()
+  inputs$recipe <- recipe.use
+  inputs$synsub <- synfile[, unique(inputs$recipe$var)] %>% mutate(wt=1)
+  synlong <- inputs$synsub %>%
+    mutate(wtnum=row_number()) %>%
+    gather(var, value, -wtnum)
+  
+  # create a data frame with one row for each weight and obj.element combination
+  coeffs <- expand.grid(wtnum=1:nrow(inputs$synsub), obj.element=inputs$recipe$obj.element, stringsAsFactors = FALSE) %>%
+    ungroup %>%
+    left_join(inputs$recipe %>% select(obj.element, var, fn, scale, priority.weight, target)) %>%
+    left_join(synlong) %>%
+    mutate(coeff=case_when(fn=="val.sum" ~ value,
+                           fn=="val.pos" ~ value*(value>0),
+                           fn=="val.neg" ~ value*(value<0),
+                           fn=="n.sum" ~ 1,
+                           fn=="n.pos" ~ 1*(value>0),
+                           fn=="n.neg" ~ 1*(value<0),
+                           TRUE  ~ 0)) %>%
+    select(obj.element, var, fn, wtnum, scale, priority.weight, value, coeff, target)
+
+  inputs$coeffs <- coeffs
+  return(inputs)
+}
+
+# names(inputs)
+# 
+# group.ind <- 1
+
+for(group.ind in 1:max(idfile$group)){
+  base <- left_join(idfile %>% filter(group==group.ind), mrgdf)
+  puf.full <- base %>% filter(ftype=="puf.full")
+  synfile <- base %>% filter(ftype==sfname)
+  recipes <- getrec(puf.full, synfile)
+  recipe.use <- recipes$recipe.use
+  inputs <- getinplist(synfile, recipe.use)
+  
+  # bounds on the weights
+  xlb <- rep(1, nrow(synfile))
+  xub <- rep(1.5*max(puf.full$wt), nrow(synfile))
+  
+  # starting point:
+  x0 <- (xlb + xub) / 2
+  x0 <- x0 * sum(puf.full$wt / sum(x0))
+  
+  opts <- list("print_level" = 5,
+               "file_print_level" = 5, # integer
+               "linear_solver" = "ma57", # mumps pardiso ma27 ma57 ma77 ma86 ma97
+               "max_iter"=300,
+               "output_file" = paste0("./results/weight_pieces/output_group_", group.ind, ".out"))
+  
+  result <- ipoptr(x0 = x0,
+                   lb = xlb,
+                   ub = xub,
+                   eval_f = eval_f_full_scaled, 
+                   eval_grad_f = eval_grad_f_full_scaled,
+                   opts = opts,
+                   inputs = inputs)
+  
+  optim <- list()
+  optim$result <- result
+  optim$puf.full <- puf.full
+  optim$synfile <- synfile
+  optim$inputs <- inputs
+  optim$recipe.flagged <- recipes$recipe.flagged
+  saveRDS(optim, paste0("./results/weight_pieces/optim_group_", group.ind, ".rds"))
+}
+
+
+#******************************************************************************************************************
+# Temporary clunky approach to getting all 3 weights for the synfile ####
+#******************************************************************************************************************
+
+tmp <- readRDS(paste0(globals$tc.dir, sfname, "_reweighted_stackedfiles.rds"))
+weights <- tibble(rownum=tmp$RECID[tmp$ftype=="puf.full"],
+                  puf.RECID=tmp$RECID[tmp$ftype=="puf.full"],
+                  puf.wt=tmp$wt[tmp$ftype=="puf.full"],
+                  syn.RECID=tmp$RECID[tmp$ftype=="synthpop3"],
+                  syn.wt=tmp$wt[tmp$ftype=="synthpop3"],
+                  syn.rwt=tmp$wt[tmp$ftype=="synthpop3.rwt"])
+ht(weights)
+
+
+#******************************************************************************************************************
+# Examine results for full file ####
+#******************************************************************************************************************
+group.ind <- 2
+
+length(optlist)
+names(optlist[[1]])
+optlist[[1]]$recipe.flagged
+names(optlist[[1]]$result)
+names(optlist[[1]]$synfile)
+
+getpiece <- function(group.ind){
+  optim <- readRDS(paste0("./results/weight_pieces/optim_group_", group.ind, ".rds"))
+}
+
+n <- 45
+optlist <- llply(1:n, getpiece, .progress="text")
+memory()
+
+# analyze summary result
+obj.vals <- laply(1:n, function(i) optlist[[i]]$result$objective)
+quantile(obj.vals) %>% round(2)
+
+# aggregate the pieces of the puf and synthetic files, and attach new weights
+# first puf
+puf.agg <- ldply(1:n, function(i) optlist[[i]]$puf.full)
+names(puf.agg)
+ht(puf.agg[, 1:5]) # NOTE that RECIDs are not in order
+min(puf.agg$RECID); max(puf.agg$RECID)
+puf.agg <- puf.agg %>% arrange(RECID)
+
+# now synthetic
+syn.agg <- ldply(1:n, function(i) {optlist[[i]]$synfile %>% mutate(syn.wtfs=optlist[[i]]$result$solution)})
+names(syn.agg)
+ht(syn.agg[, c(1:5, ncol(syn.agg))]) # RECIDs not in order here, either
+# add the other synthetic weights
+syn.agg <- syn.agg %>%
+  arrange(RECID) %>%
+  left_join(weights %>% select(RECID=syn.RECID, syn.wt, syn.rwt))
+ht(syn.agg[, c(1:5, (ncol(syn.agg)-5):ncol(syn.agg))])
+
+
+df <- bind_rows(puf.agg %>% mutate(ftype="puf"),
+                syn.agg %>% mutate(ftype="syn.raw", wt=syn.wt),
+                syn.agg %>% mutate(ftype="syn.rwt", wt=syn.rwt),
+                syn.agg %>% mutate(ftype="syn.wtfs", wt=syn.wtfs))
+
+# p <- bind_rows(tibble(w=puf.full$wt, type="1_puf"),
+#                tibble(w=result$solution, type="2_weights_from_scratch"),
+#                tibble(w=synfile$wt, type="3_reweighted_with_constraints")) %>%
+p <- df %>%
+  ggplot(aes(wt)) +
+  geom_histogram(binwidth=25, fill="blue") +
+  geom_vline(aes(xintercept = median(wt))) +
+  scale_x_continuous(breaks=seq(0, 5000, 250), limits=c(0, 3000)) +
+  theme(axis.text.x=element_text(size=8, angle=30)) +
+  facet_wrap(~ftype, nrow=2) +
+  ggtitle("Distribution of weights")
+p
+ggsave(filename="./results/weights_hist.png", plot=p, width=10, height=6, units="in")
+
+
+reform.fn <- "rate_cut.json"
+reform.fn <- "toprate.json"
+# reform.fn <- "EITC.json"
+reform <- readRDS(paste0(altruns.dir, str_remove(basename(reform.fn), ".json"), ".rds"))
+
+min(reform$RECID); max(reform$RECID)
+min(df$RECID); max(df$RECID)
+
+df2 <- left_join(df, reform %>% select(RECID, taxbc.reform=taxbc))
+glimpse(df2)
+count(df2, ftype)
+
+f <- function(var, wt=wt) {sum(var * wt / 1e9)}
+df2 %>%
+  group_by(ftype) %>%
+  summarise(n=n(), wtm=sum(wt / 1e6), 
+            agib=f(c00100, wt), 
+            wageb=f(e00200, wt), 
+            taxbcb=f(taxbc, wt),
+            taxbc.reform=f(taxbc.reform, wt)) %>%
+  gather(var, value, -ftype) %>%
+  spread(ftype, value) %>%
+  mutate_at(vars(syn.raw, syn.rwt, syn.wtfs), funs(diff=. - puf, pdiff=(. - puf) / puf * 100))
+
+agiranges <- c(-Inf, 0, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, 1e6, 10e6, Inf)
+comps <- df2 %>%
+  mutate(agirange=cut(c00100, agiranges, right=FALSE), wtvar=1e9) %>%
+  group_by(ftype, agirange) %>%
+  summarise_at(vars(wtvar, c00100, taxbc, taxbc.reform, e00200, e01700), funs(sum(. * wt) / 1e9))
+comps
+
+
+# get the % change in tax by file
+dtot <- function(df){
+  dsums <- df %>% 
+    summarise_at(vars(-ftype, -agirange), funs(sum)) %>%
+    mutate(ftype=df$ftype[1], agirange="Total")
+  dfout <- bind_rows(df, dsums)
+  return(dfout)
+}
+
+diffs <- df2 %>%
+  mutate(agirange=cut(c00100, agiranges, right=FALSE)) %>%
+  group_by(ftype, agirange) %>%
+  summarise_at(vars(taxbc, taxbc.reform), funs(sum(. * wt) / 1e9)) %>%
+  do(dtot(.)) %>%
+  mutate(agirange=factor(agirange, levels=unique(agirange), ordered=TRUE),
+         diff=taxbc.reform - taxbc,
+         pdiff=diff / taxbc * 100)
+
+diffs %>%
+  select(ftype, agirange, taxbc) %>%
+  spread(ftype, taxbc) %>%
+  mutate(var="taxbc$b", reform=reform.fn) %>%
+  kable(digits=1)
+
+diffs %>%
+  select(ftype, agirange, taxbc.reform) %>%
+  spread(ftype, taxbc.reform) %>%
+  mutate(var="taxbc.reform$b", reform=reform.fn) %>%
+  kable(digits=1)
+
+diffs %>%
+  select(ftype, agirange, diff) %>%
+  spread(ftype, diff) %>%
+  mutate(var="change.v.baseline$b", reform=reform.fn) %>%
+  kable(digits=1)
+
+diffs %>%
+  select(ftype, agirange, pdiff) %>%
+  spread(ftype, pdiff) %>%
+  mutate(var="pct.change.v.baseline", reform=reform.fn) %>%
+  kable(digits=1)
 
 
 #******************************************************************************************************************
