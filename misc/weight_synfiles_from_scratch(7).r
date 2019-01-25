@@ -1,7 +1,6 @@
 
 
 
-
 #****************************************************************************************************
 #                Libraries ####
 #****************************************************************************************************
@@ -195,6 +194,7 @@ recipe.flagged
 # remove recipe elements where the target is zero
 recipe.use <- recipe.flagged %>%
   filter(!(flag.dropneg | flag.dropdupsum | flag.dropdupn)) %>%
+  filter(target!=0) %>%
   select(obj.element, var, fn, scale, target)
 recipe.use
 
@@ -279,7 +279,7 @@ opts <- list("print_level" = 5,
              "max_iter"=500,
              # "derivative_test"="first-order",
              # "derivative_test_print_all"="yes",
-             "output_file" = "scratch_new.out")
+             "output_file" = "scratch.out")
 
 a <- proc.time()
 result <- ipoptr(x0 = x0,
@@ -292,13 +292,13 @@ result <- ipoptr(x0 = x0,
 b <- proc.time()
 b - a
 
-optim_example <- list()
-optim_example$result <- result
-optim_example$puf.full <- puf.full
-optim_example$synfile <- synfile
-optim_example$inputs <- inputs
-optim_example$recipe.flagged <- recipe.flagged
-saveRDS(optim_example, "./results/optim_example.rds")
+# optim_example <- list()
+# optim_example$result <- result
+# optim_example$puf.full <- puf.full
+# optim_example$synfile <- synfile
+# optim_example$inputs <- inputs
+# optim_example$recipe.flagged <- recipe.flagged
+# saveRDS(optim_example, "./results/optim_example.rds")
 
 
 #******************************************************************************************************************
@@ -362,7 +362,7 @@ p <- bind_rows(tibble(w=puf.full$wt, type="1_puf"),
   ggtitle("Distribution of weights")
 p
 
-ggsave("./results/optim_example_hist.png", plot=p)
+# ggsave("./results/optim_example_hist.png", plot=p)
 
 
 #******************************************************************************************************************
@@ -671,15 +671,12 @@ syn.agg <- syn.agg %>%
 ht(syn.agg[, c(1:5, (ncol(syn.agg)-5):ncol(syn.agg))])
 
 
-df <- bind_rows(puf.agg %>% mutate(ftype="puf"),
+stack <- bind_rows(puf.agg %>% mutate(ftype="puf"),
                 syn.agg %>% mutate(ftype="syn.raw", wt=syn.wt),
                 syn.agg %>% mutate(ftype="syn.rwt", wt=syn.rwt),
                 syn.agg %>% mutate(ftype="syn.wtfs", wt=syn.wtfs))
 
-# p <- bind_rows(tibble(w=puf.full$wt, type="1_puf"),
-#                tibble(w=result$solution, type="2_weights_from_scratch"),
-#                tibble(w=synfile$wt, type="3_reweighted_with_constraints")) %>%
-p <- df %>%
+p <- stack %>%
   ggplot(aes(wt)) +
   geom_histogram(binwidth=25, fill="blue") +
   geom_vline(aes(xintercept = median(wt))) +
@@ -690,7 +687,71 @@ p <- df %>%
 p
 ggsave(filename="./results/weights_hist.png", plot=p, width=10, height=6, units="in")
 
+#.. summary statistics on the results ----
+agiranges <- c(-Inf, 0, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, 1e6, 10e6, Inf)
+f <- function(var, wt=wt) {sum(var * wt / 1e9)}
 
+var <- "e00200"
+
+vlist <- c("c00100", "e00200", "e00300", "e00600", "e01700", "p23250", "taxbc")
+dfsums <- stack %>%
+  mutate(agirange=cut(c00100, agiranges, right=FALSE),
+         ftype=str_remove(ftype, "syn."),
+         wtone=1e9) %>%
+  select(ftype, agirange, wt, wtone, vlist) %>%
+  gather(vname, value, -ftype, -agirange, -wt) %>%
+  group_by(ftype, agirange, vname) %>%
+  summarise(n=n(), wtsum.m=sum(wt) / 1e6, valsum.b=sum(wt * value) / 1e9) %>%
+  left_join(puf.vnames %>% select(vname, vdesc))
+dfsums
+totrows <- dfsums %>%
+  group_by(ftype, vname, vdesc) %>%
+  summarise_at(vars(n, wtsum.m, valsum.b), funs(sum)) %>%
+  mutate(agirange="Total")
+dfall <-bind_rows(dfsums, totrows) %>%
+  ungroup %>%
+  mutate(agirange=factor(agirange, levels=c(levels(dfsums$agirange), "Total")),
+         avgval=valsum.b * 1e3 / wtsum.m) %>%
+  arrange(ftype, vname, vdesc, agirange)
+
+tab <- function(vname.in, ttype="sum"){
+  digits.id <- rep(0, 3)
+  digits.vals <- rep(1, 7)
+  digits.pdiff <- rep(1, 3)
+  digits.other <- 0
+  if(ttype=="sum") {
+    selvar <- "valsum.b"
+    if(vname.in=="wtone") digits.vals <- rep(0, 7)
+    } else
+    if(ttype=="avg") {
+      selvar <- "avgval"
+      digits.vals <- rep(0, 7)
+    }
+  digits.tab <- c(digits.id, digits.vals, digits.pdiff, digits.other)
+  df <- dfall %>%
+    filter(vname==vname.in) %>%
+    select(ftype, agirange, vname, vdesc, var=selvar) %>%
+    mutate(ttype=ttype,
+           vdesc=str_sub(vdesc, 1, 20)) %>%
+    spread(ftype, var) %>%
+    mutate_at(vars(raw, rwt, wtfs), funs(diff=. - puf, pdiff=(. - puf) / puf * 100)) %>%
+    select(-vdesc, everything(), vdesc)
+  dfk <- df %>%
+    kable(digits=digits.tab, format.args=list(big.mark = ','))
+  return(dfk)
+}
+
+tab("wtone", "sum")
+
+tab("c00100", "sum"); tab("c00100", "avg")
+var <- "e00200"; suppressWarnings(tab(var, "sum")); suppressWarnings(tab(var, "avg"))
+var <- "e00300"; suppressWarnings(tab(var, "sum")); suppressWarnings(tab(var, "avg"))
+var <- "e00600"; suppressWarnings(tab(var, "sum")); suppressWarnings(tab(var, "avg"))
+var <- "p23250"; suppressWarnings(tab(var, "sum")); suppressWarnings(tab(var, "avg"))
+var <- "taxbc"; suppressWarnings(tab(var, "sum")); suppressWarnings(tab(var, "avg"))
+
+
+#.. examine tax reforms ----
 reform.fn <- "rate_cut.json"
 reform.fn <- "toprate.json"
 # reform.fn <- "EITC.json"
@@ -699,12 +760,12 @@ reform <- readRDS(paste0(altruns.dir, str_remove(basename(reform.fn), ".json"), 
 min(reform$RECID); max(reform$RECID)
 min(df$RECID); max(df$RECID)
 
-df2 <- left_join(df, reform %>% select(RECID, taxbc.reform=taxbc))
-glimpse(df2)
-count(df2, ftype)
+stack.mrg <- left_join(stack, reform %>% select(RECID, taxbc.reform=taxbc))
+glimpse(stack.mrg)
+count(stack.mrg, ftype)
 
 f <- function(var, wt=wt) {sum(var * wt / 1e9)}
-df2 %>%
+stack.mrg %>%
   group_by(ftype) %>%
   summarise(n=n(), wtm=sum(wt / 1e6), 
             agib=f(c00100, wt), 
@@ -714,13 +775,6 @@ df2 %>%
   gather(var, value, -ftype) %>%
   spread(ftype, value) %>%
   mutate_at(vars(syn.raw, syn.rwt, syn.wtfs), funs(diff=. - puf, pdiff=(. - puf) / puf * 100))
-
-agiranges <- c(-Inf, 0, 25e3, 50e3, 75e3, 100e3, 200e3, 500e3, 1e6, 10e6, Inf)
-comps <- df2 %>%
-  mutate(agirange=cut(c00100, agiranges, right=FALSE), wtvar=1e9) %>%
-  group_by(ftype, agirange) %>%
-  summarise_at(vars(wtvar, c00100, taxbc, taxbc.reform, e00200, e01700), funs(sum(. * wt) / 1e9))
-comps
 
 
 # get the % change in tax by file
@@ -732,7 +786,7 @@ dtot <- function(df){
   return(dfout)
 }
 
-diffs <- df2 %>%
+diffs <- stack.mrg %>%
   mutate(agirange=cut(c00100, agiranges, right=FALSE)) %>%
   group_by(ftype, agirange) %>%
   summarise_at(vars(taxbc, taxbc.reform), funs(sum(. * wt) / 1e9)) %>%
