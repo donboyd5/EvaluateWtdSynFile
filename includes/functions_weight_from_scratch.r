@@ -131,11 +131,6 @@ eval_grad_f_full_scaled <- function(w, inputs){
   grad <- inputs$coeffs %>% 
     left_join(wdf, by="wtnum") %>%
     group_by(obj.element) %>%
-    # mutate(gsum=sum(wt.iter*coeff), diff=gsum - first(target)) %>%
-    # mutate(g2=(gsum + 1*coeff - target)^2 - (gsum - target)^2) %>%
-    # mutate(cdiff=coeff*(sum(wt.iter*coeff) - first(target))) %>%
-    # mutate(cscaled=cdiff /(first(scale)^2)) %>%
-    # mutate(g3=2 * priority.weight * cscaled) %>%
     mutate(calc=sum(wt.iter*coeff)) %>%
     mutate(grad={2 * coeff * priority.weight * (calc - target)} / {scale^2}) %>%
     group_by(wtnum) %>%
