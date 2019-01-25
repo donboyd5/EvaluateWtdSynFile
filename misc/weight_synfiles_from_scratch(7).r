@@ -586,7 +586,7 @@ for(group.ind in 1:max(idfile$group)){
                "file_print_level" = 5, # integer
                "linear_solver" = "ma57", # mumps pardiso ma27 ma57 ma77 ma86 ma97
                "max_iter"=300,
-               "output_file" = paste0("./results/weight_pieces/output_group_", group.ind, ".out"))
+               "output_file" = paste0(globals$tc.dir, "weight_pieces/output_group_", group.ind, ".out"))
   
   result <- ipoptr(x0 = x0,
                    lb = xlb,
@@ -602,7 +602,7 @@ for(group.ind in 1:max(idfile$group)){
   optim$synfile <- synfile
   optim$inputs <- inputs
   optim$recipe.flagged <- recipes$recipe.flagged
-  saveRDS(optim, paste0("./results/weight_pieces/optim_group_", group.ind, ".rds"))
+  saveRDS(optim, paste0(globals$tc.dir, "weight_pieces/optim_group_", group.ind, ".rds"))
 }
 
 
@@ -623,33 +623,42 @@ ht(weights)
 #******************************************************************************************************************
 # Examine results for full file ####
 #******************************************************************************************************************
-group.ind <- 2
 
-length(optlist)
-names(optlist[[1]])
-optlist[[1]]$recipe.flagged
-names(optlist[[1]]$result)
-names(optlist[[1]]$synfile)
 
 getpiece <- function(group.ind){
-  optim <- readRDS(paste0("./results/weight_pieces/optim_group_", group.ind, ".rds"))
+  optim <- readRDS(paste0(globals$tc.dir, "weight_pieces/optim_group_", group.ind, ".rds"))
 }
 
 n <- 45
 optlist <- llply(1:n, getpiece, .progress="text")
 memory()
 
+group.ind <- 2
+
+length(optlist)
+names(optlist[[1]])
+names(optlist[[1]]$inputs)
+optlist[[1]]$inputs$recipe
+optlist[[1]]$recipe.flagged
+unique(optlist[[1]]$recipe.flagged$var)
+names(optlist[[1]]$result)
+names(optlist[[1]]$synfile)
+
 # analyze summary result
 obj.vals <- laply(1:n, function(i) optlist[[i]]$result$objective)
 quantile(obj.vals) %>% round(2)
+
+message <- laply(1:n, function(i) optlist[[i]]$result$message)
+count(tibble(message), message)
 
 # aggregate the pieces of the puf and synthetic files, and attach new weights
 # first puf
 puf.agg <- ldply(1:n, function(i) optlist[[i]]$puf.full)
 names(puf.agg)
-ht(puf.agg[, 1:5]) # NOTE that RECIDs are not in order
+ht(puf.agg[, c(1:5, (ncol(puf.agg)-5):ncol(puf.agg))]) # NOTE that RECIDs are not in order
 min(puf.agg$RECID); max(puf.agg$RECID)
 puf.agg <- puf.agg %>% arrange(RECID)
+
 
 # now synthetic
 syn.agg <- ldply(1:n, function(i) {optlist[[i]]$synfile %>% mutate(syn.wtfs=optlist[[i]]$result$solution)})
