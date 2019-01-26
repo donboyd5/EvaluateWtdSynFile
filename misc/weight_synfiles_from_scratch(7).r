@@ -252,11 +252,19 @@ inputs$coeffs <- coeffs
 
 # bounds on the weights
 xlb <- rep(1, nrow(synfile))
-xub <- rep(1.5*max(puf.full$wt), nrow(synfile))
+#xub <- rep(1.5*max(puf.full$wt), nrow(synfile))
+xub <- rep(max(puf.full$wt), nrow(synfile))
 
 # starting point:
 x0 <- (xlb + xub) / 2
 x0 <- x0 * sum(puf.full$wt / sum(x0))
+
+x0 <- rnorm(nrow(synfile), mean(puf.full$wt), sd(puf.full$wt))
+x0 <- ifelse(x0<1, 1, x0)
+x0 <- ifelse(x0>max(puf.full$wt), max(puf.full$wt), x0)
+min(x0)
+max(x0)
+
 
 # PRE-CHECK: Take a look at the values at the starting point
 start <- inputs$recipe %>%
@@ -344,7 +352,7 @@ comp %>%
 comp %>%
   arrange(apdiff)
 
-comp %>% filter(var %in% c('c00100', "e00200", "taxbc"))
+comp %>% filter(var %in% c("wt", 'c00100', "e00200", "taxbc"))
 
 quantile(w.sol, probs=0:10/10)
 quantile(synfile$wt, probs=0:10/10)
@@ -633,7 +641,7 @@ n <- 45
 optlist <- llply(1:n, getpiece, .progress="text")
 memory()
 
-group.ind <- 2
+# group.ind <- 2
 
 length(optlist)
 names(optlist[[1]])
@@ -667,8 +675,12 @@ ht(syn.agg[, c(1:5, ncol(syn.agg))]) # RECIDs not in order here, either
 # add the other synthetic weights
 syn.agg <- syn.agg %>%
   arrange(RECID) %>%
-  left_join(weights %>% select(RECID=syn.RECID, syn.wt, syn.rwt))
+  left_join(weights %>% select(RECID=syn.RECID, syn.wt, syn.rwt)) %>%
+  mutate(wt=syn.wtfs)
 ht(syn.agg[, c(1:5, (ncol(syn.agg)-5):ncol(syn.agg))])
+write_csv(syn.agg, paste0(globals$synd, "synthpop3_allwts.csv"))
+
+cor(syn.agg %>% select(syn.wt, syn.rwt, syn.wtfs))
 
 
 stack <- bind_rows(puf.agg %>% mutate(ftype="puf"),
